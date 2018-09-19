@@ -49,6 +49,8 @@ parser.add_argument('--resume', default='', type=str, metavar='PATH',
                     help='path to latest checkpoint (default: none)')
 parser.add_argument('-e', '--evaluate', dest='evaluate', action='store_true',
                     help='evaluate model on validation set')
+parser.add_argument('--feature-analyze', dest='feature_analyze', action='store_true',
+                    help='analyze features')
 parser.add_argument('--pretrained', dest='pretrained', action='store_true',
                     help='use pre-trained model')
 parser.add_argument('--world-size', default=1, type=int,
@@ -165,6 +167,9 @@ def main():
         ])),
         batch_size=args.batch_size, shuffle=False,
         num_workers=args.workers, pin_memory=True)
+
+    if args.feature_analyze:
+        feature_analyze_per_class(val_loader, 123, model, criterion)
 
     if args.evaluate:
         validate(val_loader, model, criterion)
@@ -286,6 +291,70 @@ def validate(val_loader, model, criterion):
 
     return top1.avg
 
+# analyze statistics of features for a target class
+def feature_analyze_per_class(loader, label, model, criterion):
+    batch_time = AverageMeter()
+    losses = AverageMeter()
+    top1 = AverageMeter()
+    top5 = AverageMeter()
+
+    # switch to evaluate mode
+    model.eval()
+
+    with torch.no_grad():
+        end = time.time()
+        input_one_class = []
+        target_one_class = []
+        for i, (input, target) in enumerate(loader):
+            # concate data matching the label
+            indices_matched = (target==label).nonzero().squeeze_()
+            input_matched = input[indices_matched]
+            target_matched = target[indices_matched]
+            input_one_class = torch.cat((input_one_class, input_matched))
+            target_one_class = torch.cat((target_one_class, target_matched))
+            assert (input_one_class.size()[0] == target_one_class.size()[0])
+
+            if (input_one_class.size()[0] < args.batch_size) and (
+                    i != len(loader)-1):
+                continue
+
+            assert ((input_one_class.size()[0] >= args.batch_size) or (i == len(loader)-1))
+
+            if args.gpu is not None:
+                input_one_class = input_one_class.cuda(args.gpu, non_blocking=True)
+                target_one_class = target_one_class.cuda(args.gpu, non_blocking=True)
+
+            # compute output
+            output = model(input_one_class)
+            loss = criterion(output, target_one_class)
+
+            # measure accuracy and record loss
+            prec1, prec5 = accuracy(output, target_one_class, topk=(1, 5))
+            losses.update(loss.item(), input_one_class.size(0))
+            top1.update(prec1[0], input_one_class.size(0))
+            top5.update(prec5[0], input_one_class.size(0))
+
+            # measure elapsed time
+            batch_time.update(time.time() - end)
+            end = time.time()
+
+            if i % args.print_freq == 0:
+                print('Test: [{0}/{1}]\t'
+                      'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
+                      'Loss {loss.val:.4f} ({loss.avg:.4f})\t'
+                      'Prec@1 {top1.val:.3f} ({top1.avg:.3f})\t'
+                      'Prec@5 {top5.val:.3f} ({top5.avg:.3f})'.format(
+                       i, len(loader), batch_time=batch_time, loss=losses,
+                       top1=top1, top5=top5))
+
+            # clear the buffer
+            input_one_class = []
+            target_one_class = []
+
+        print(' * Prec@1 {top1.avg:.3f} Prec@5 {top5.avg:.3f}'
+              .format(top1=top1, top5=top5))
+
+    return top1.avg
 
 def save_checkpoint(state, is_best, filename='checkpoint.pth.tar'):
     torch.save(state, filename)
