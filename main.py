@@ -169,7 +169,7 @@ def main():
         num_workers=args.workers, pin_memory=True)
 
     if args.feature_analyze:
-        feature_analyze_per_class(val_loader, 123, model, criterion)
+        feature_analyze_per_class(train_loader, 8, model, criterion)
 
     if args.evaluate:
         validate(val_loader, model, criterion)
@@ -303,15 +303,20 @@ def feature_analyze_per_class(loader, label, model, criterion):
 
     with torch.no_grad():
         end = time.time()
-        input_one_class = []
-        target_one_class = []
+        input_one_class = None
+        target_one_class = None
         for i, (input, target) in enumerate(loader):
             # concate data matching the label
             indices_matched = (target==label).nonzero().squeeze_()
             input_matched = input[indices_matched]
             target_matched = target[indices_matched]
-            input_one_class = torch.cat((input_one_class, input_matched))
-            target_one_class = torch.cat((target_one_class, target_matched))
+            if input_one_class is None:
+                assert (target_one_class is None)
+                input_one_class = input_matched
+                target_one_class = target_matched
+            else:
+                input_one_class = torch.cat((input_one_class, input_matched))
+                target_one_class = torch.cat((target_one_class, target_matched))
             assert (input_one_class.size()[0] == target_one_class.size()[0])
 
             if (input_one_class.size()[0] < args.batch_size) and (
@@ -348,8 +353,8 @@ def feature_analyze_per_class(loader, label, model, criterion):
                        top1=top1, top5=top5))
 
             # clear the buffer
-            input_one_class = []
-            target_one_class = []
+            input_one_class = None
+            target_one_class = None
 
         print(' * Prec@1 {top1.avg:.3f} Prec@5 {top5.avg:.3f}'
               .format(top1=top1, top5=top5))
