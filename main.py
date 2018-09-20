@@ -169,7 +169,12 @@ def main():
         num_workers=args.workers, pin_memory=True)
 
     if args.feature_analyze:
-        feature_analyze_per_class(train_loader, 8, model, criterion)
+        sum_accu = 0.0
+        for label in range(1000):
+            accu = feature_analyze_per_class(val_loader, label, model, criterion)
+            sum_accu += accu
+            print "class ", label, " accuracy = ", accu
+        print "* accuracy: ", sum_accu/1000
 
     if args.evaluate:
         validate(val_loader, model, criterion)
