@@ -29,7 +29,7 @@ parser.add_argument('--arch', '-a', metavar='ARCH', default='resnet18',
                     help='model architecture: ' +
                         ' | '.join(model_names) +
                         ' (default: resnet18)')
-parser.add_argument('-j', '--workers', default=4, type=int, metavar='N',
+parser.add_argument('-j', '--workers', default=16, type=int, metavar='N',
                     help='number of data loading workers (default: 4)')
 parser.add_argument('--epochs', default=90, type=int, metavar='N',
                     help='number of total epochs to run')
@@ -307,7 +307,7 @@ def feature_analyze_per_class(loader, label, model, criterion):
         target_one_class = None
         for i, (input, target) in enumerate(loader):
             # concate data matching the label
-            indices_matched = (target==label).nonzero().squeeze_()
+            indices_matched = (target==label).nonzero().reshape(-1)
             input_matched = input[indices_matched]
             target_matched = target[indices_matched]
             if input_one_class is None:
@@ -323,11 +323,9 @@ def feature_analyze_per_class(loader, label, model, criterion):
                     i != len(loader)-1):
                 continue
 
-            assert ((input_one_class.size()[0] >= args.batch_size) or (i == len(loader)-1))
-
             if args.gpu is not None:
                 input_one_class = input_one_class.cuda(args.gpu, non_blocking=True)
-                target_one_class = target_one_class.cuda(args.gpu, non_blocking=True)
+            target_one_class = target_one_class.cuda(args.gpu, non_blocking=True)
 
             # compute output
             output = model(input_one_class)
