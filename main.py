@@ -173,8 +173,7 @@ def main():
         for label in range(1000):
             accu = feature_analyze_per_class(val_loader, label, model, criterion)
             sum_accu += accu
-            print "class ", label, " accuracy = ", accu
-        print "* accuracy: ", sum_accu/1000
+        print "** averge top-1 accuracy: ", sum_accu/1000
 
     if args.evaluate:
         validate(val_loader, model, criterion)
@@ -299,6 +298,7 @@ def validate(val_loader, model, criterion):
 # analyze statistics of features for a target class
 def feature_analyze_per_class(loader, label, model, criterion):
     batch_time = AverageMeter()
+    total_time = AverageMeter()
     losses = AverageMeter()
     top1 = AverageMeter()
     top5 = AverageMeter()
@@ -307,6 +307,7 @@ def feature_analyze_per_class(loader, label, model, criterion):
     model.eval()
 
     with torch.no_grad():
+        start = time.time()
         end = time.time()
         input_one_class = None
         target_one_class = None
@@ -358,9 +359,9 @@ def feature_analyze_per_class(loader, label, model, criterion):
             # clear the buffer
             input_one_class = None
             target_one_class = None
-
-        print(' * Prec@1 {top1.avg:.3f} Prec@5 {top5.avg:.3f}'
-              .format(top1=top1, top5=top5))
+        total_time.update(time.time() - start)
+        print(' * Class {label} Prec@1 {top1.avg:.3f} Prec@5 {top5.avg:.3f} Time {total_time.avg:.3f}s'
+              .format(label=label, top1=top1, top5=top5, total_time=total_time))
 
     return top1.avg
 
