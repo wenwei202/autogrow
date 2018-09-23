@@ -297,6 +297,18 @@ def validate(val_loader, model, criterion):
 # ensure loader loads samples in the order of labels
 # that is, make sure shuffling is disable in the loader
 def feature_analyze_all_classes(loader, model, criterion):
+    # add hook to store input features of each conv2d
+    conv2d_inputs = {}
+    def myhook(m, input, output):
+        conv2d_inputs[m] = input[0]
+        print(input[0].size())
+    handles = []
+    for idx, m in enumerate(model.named_modules()):
+        if isinstance(m[1], nn.Conv2d):
+            print('{} registering hook...'.format(m[0]))
+            h = m[1].register_forward_hook(hook=myhook)
+            handles.append(h)
+
     batch_time = AverageMeter()
     total_time = AverageMeter()
     losses = AverageMeter()
@@ -355,6 +367,10 @@ def feature_analyze_all_classes(loader, model, criterion):
         total_time.update(time.time() - start)
         print(' * Prec@1 {top1.avg:.3f} Prec@5 {top5.avg:.3f} Time {total_time.avg:.3f}s'
               .format(top1=top1, top5=top5, total_time=total_time))
+
+    # remove hooks
+    for h in handles:
+        h.remove()
 
     return top1.avg
 
