@@ -169,11 +169,7 @@ def main():
         num_workers=args.workers, pin_memory=True)
 
     if args.feature_analyze:
-        sum_accu = 0.0
-        for label in range(1000):
-            accu = feature_analyze_per_class(val_loader, label, model, criterion)
-            sum_accu += accu
-        print "** averge top-1 accuracy: ", sum_accu/1000
+        feature_analyze_all_classes(val_loader, model, criterion)
 
     if args.evaluate:
         validate(val_loader, model, criterion)
@@ -294,6 +290,74 @@ def validate(val_loader, model, criterion):
               .format(top1=top1, top5=top5))
 
     return top1.avg
+
+
+# analyze statistics of features for all classes
+# for efficient execution:
+# ensure loader loads samples in the order of labels
+# that is, make sure shuffling is disable in the loader
+def feature_analyze_all_classes(loader, model, criterion):
+    batch_time = AverageMeter()
+    total_time = AverageMeter()
+    losses = AverageMeter()
+    top1 = AverageMeter()
+    top5 = AverageMeter()
+
+    # switch to evaluate mode
+    model.eval()
+
+    with torch.no_grad():
+        start = time.time()
+        end = time.time()
+        for i, (input, target) in enumerate(loader):
+            # concatenate data matching the label]
+            labels = torch.unique(target, sorted=True)
+            inputs_matched = []
+            targets_matched = []
+            for label in labels:
+                indices_matched = (target == label).nonzero().reshape(-1)
+                inputs_matched.append(input[indices_matched])
+                targets_matched.append(target[indices_matched])
+            assert (sum([e.size()[0] for e in inputs_matched]) == input.size()[0])
+            assert (sum([e.size()[0] for e in targets_matched]) == input.size()[0])
+
+            if args.gpu is not None:
+                for idx, val in enumerate(inputs_matched):
+                    inputs_matched[idx] = inputs_matched[idx].cuda(args.gpu, non_blocking=True)
+
+            for idx, val in enumerate(targets_matched):
+                targets_matched[idx] = targets_matched[idx].cuda(args.gpu, non_blocking=True)
+
+            # compute output
+            for input_one_class, target_one_class in zip(inputs_matched, targets_matched):
+                assert (input_one_class.size()[0])
+                output = model(input_one_class)
+                loss = criterion(output, target_one_class)
+                # measure accuracy and record loss
+                prec1, prec5 = accuracy(output, target_one_class, topk=(1, 5))
+                losses.update(loss.item(), input_one_class.size(0))
+                top1.update(prec1[0], input_one_class.size(0))
+                top5.update(prec5[0], input_one_class.size(0))
+
+            # measure elapsed time
+            batch_time.update(time.time() - end)
+            end = time.time()
+
+            if i % args.print_freq == 0:
+                print('Test: [{0}/{1}]\t'
+                      'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
+                      'Loss {loss.val:.4f} ({loss.avg:.4f})\t'
+                      'Prec@1 {top1.val:.3f} ({top1.avg:.3f})\t'
+                      'Prec@5 {top5.val:.3f} ({top5.avg:.3f})'.format(
+                       i, len(loader), batch_time=batch_time, loss=losses,
+                       top1=top1, top5=top5))
+
+        total_time.update(time.time() - start)
+        print(' * Prec@1 {top1.avg:.3f} Prec@5 {top5.avg:.3f} Time {total_time.avg:.3f}s'
+              .format(top1=top1, top5=top5, total_time=total_time))
+
+    return top1.avg
+
 
 # analyze statistics of features for a target class
 def feature_analyze_per_class(loader, label, model, criterion):
