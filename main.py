@@ -4,6 +4,9 @@ import random
 import shutil
 import time
 import warnings
+import pickle
+import collections
+import shutil
 
 import torch
 import torch.nn as nn
@@ -291,6 +294,13 @@ def validate(val_loader, model, criterion):
 
     return top1.avg
 
+def save_obj(obj, name ):
+    with open(name + '.pkl', 'wb+') as f:
+        pickle.dump(obj, f, pickle.HIGHEST_PROTOCOL)
+
+def load_obj(name ):
+    with open(name + '.pkl', 'rb') as f:
+        return pickle.load(f)
 
 # analyze statistics of features for all classes
 # for efficient execution:
@@ -298,16 +308,21 @@ def validate(val_loader, model, criterion):
 # that is, make sure shuffling is disable in the loader
 def feature_analyze_all_classes(loader, model, criterion):
     # add hook to store input features of each conv2d
-    conv2d_inputs = {}
+    directory = 'conv_features'
+    if os.path.exists(directory):
+        shutil.rmtree(directory)
+    os.mkdir(directory)
+    conv2d_inputs = collections.OrderedDict()
     def myhook(m, input, output):
-        conv2d_inputs[m] = input[0]
-        print(input[0].size())
+        conv2d_inputs[id(m)] = torch.sum(input[0], dim=0)
     handles = []
+    layer_names = []
     for idx, m in enumerate(model.named_modules()):
         if isinstance(m[1], nn.Conv2d):
             print('{} registering hook...'.format(m[0]))
             h = m[1].register_forward_hook(hook=myhook)
             handles.append(h)
+            layer_names.append(m[0])
 
     batch_time = AverageMeter()
     total_time = AverageMeter()
@@ -343,7 +358,21 @@ def feature_analyze_all_classes(loader, model, criterion):
             # compute output
             for input_one_class, target_one_class in zip(inputs_matched, targets_matched):
                 assert (input_one_class.size()[0])
+                file_name = "{path}/class_{num:03d}".format(path=directory, num=target_one_class[0])
+                try:
+                    history_conv2d_inputs = load_obj(file_name)
+                except IOError:
+                    history_conv2d_inputs = None
+                # run forward and save current features by hooks
                 output = model(input_one_class)
+                # accumulate features
+                if history_conv2d_inputs is not None:
+                    for key, value in conv2d_inputs.iteritems():
+                        assert (key in history_conv2d_inputs)
+                        conv2d_inputs[key] += history_conv2d_inputs[key]
+                # save new features
+                save_obj(conv2d_inputs, file_name)
+
                 loss = criterion(output, target_one_class)
                 # measure accuracy and record loss
                 prec1, prec5 = accuracy(output, target_one_class, topk=(1, 5))
