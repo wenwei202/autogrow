@@ -314,7 +314,7 @@ def feature_analyze_all_classes(loader, model, criterion):
     os.mkdir(directory)
     conv2d_inputs = collections.OrderedDict()
     def myhook(m, input, output):
-        conv2d_inputs[id(m)] = torch.sum(input[0], dim=0)
+        conv2d_inputs[id(m)] = torch.sum(torch.abs(input[0]), dim=0)
     handles = []
     layer_names = []
     for idx, m in enumerate(model.named_modules()):
