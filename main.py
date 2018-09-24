@@ -1,7 +1,6 @@
 import argparse
 import os
 import random
-import shutil
 import time
 import warnings
 import pickle
@@ -173,6 +172,7 @@ def main():
 
     if args.feature_analyze:
         feature_analyze_all_classes(val_loader, model, criterion)
+        get_contri_ratios()
 
     if args.evaluate:
         validate(val_loader, model, criterion)
@@ -403,6 +403,27 @@ def feature_analyze_all_classes(loader, model, criterion):
 
     return top1.avg
 
+
+def get_contri_ratios(directory='conv_features'):
+    allfiles = [directory+"/"+f for f in os.listdir(directory) if os.path.isfile(os.path.join(directory, f))]
+    allfiles = [os.path.splitext(f)[0] for f in allfiles]
+    vals_sum = None
+    print ("Getting the sum...")
+    for f in allfiles:
+        label = int(f.split("_")[-1])
+        if vals_sum is None:
+            vals_sum = load_obj(f)
+        else:
+            features = load_obj(f)
+            for key, value in features.iteritems():
+                assert (key in vals_sum)
+                vals_sum[key] += features[key]
+    print ("Calculating the ratios...")
+    for f in allfiles:
+        features = load_obj(f)
+        for key, value in features.iteritems():
+            features[key] = features[key]/(vals_sum[key]+1.0e-8)
+        save_obj(features, f)
 
 # analyze statistics of features for a target class
 def feature_analyze_per_class(loader, label, model, criterion):
