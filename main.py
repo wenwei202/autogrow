@@ -6,6 +6,8 @@ import warnings
 import pickle
 import collections
 import shutil
+import numpy as np
+import matplotlib.pyplot as plt
 
 import torch
 import torch.nn as nn
@@ -173,6 +175,7 @@ def main():
     if args.feature_analyze:
         feature_analyze_all_classes(val_loader, model, criterion)
         get_contri_ratios()
+        plot_contri_ratios()
 
     if args.evaluate:
         validate(val_loader, model, criterion)
@@ -306,7 +309,7 @@ def load_obj(name ):
 # for efficient execution:
 # ensure loader loads samples in the order of labels
 # that is, make sure shuffling is disable in the loader
-def feature_analyze_all_classes(loader, model, criterion):
+def feature_analyze_all_classes(loader, model, criterion, num_classes=1000):
     # add hook to store input features of each conv2d
     directory = 'conv_features'
     if os.path.exists(directory):
@@ -336,6 +339,7 @@ def feature_analyze_all_classes(loader, model, criterion):
     with torch.no_grad():
         start = time.time()
         end = time.time()
+        counts = np.zeros(num_classes)
         for i, (input, target) in enumerate(loader):
             # concatenate data matching the label]
             labels = torch.unique(target, sorted=True)
@@ -357,6 +361,7 @@ def feature_analyze_all_classes(loader, model, criterion):
 
             # compute output
             for input_one_class, target_one_class in zip(inputs_matched, targets_matched):
+                counts[target_one_class[0]] += target_one_class.size()[0]
                 assert (input_one_class.size()[0])
                 file_name = "{path}/class_{num:03d}".format(path=directory, num=target_one_class[0])
                 try:
@@ -392,6 +397,17 @@ def feature_analyze_all_classes(loader, model, criterion):
                       'Prec@5 {top5.val:.3f} ({top5.avg:.3f})'.format(
                        i, len(loader), batch_time=batch_time, loss=losses,
                        top1=top1, top5=top5))
+        print ("Totally {} images were processed".format(sum(counts)))
+        print counts
+        # averging
+        allfiles = [directory + "/" + f for f in os.listdir(directory) if os.path.isfile(os.path.join(directory, f))]
+        allfiles = [os.path.splitext(f)[0] for f in allfiles]
+        for f in allfiles:
+            cur_label = int(f.split("_")[-1])
+            features = load_obj(f)
+            for key, value in features.iteritems():
+                features[key] = features[key] / counts[cur_label]
+            save_obj(features, f)
 
         total_time.update(time.time() - start)
         print(' * Prec@1 {top1.avg:.3f} Prec@5 {top5.avg:.3f} Time {total_time.avg:.3f}s'
@@ -424,6 +440,31 @@ def get_contri_ratios(directory='conv_features'):
         for key, value in features.iteritems():
             features[key] = features[key]/(vals_sum[key]+1.0e-8)
         save_obj(features, f)
+
+def plot_contri_ratios(directory='conv_features', num_classes=1000):
+    allfiles = [directory+"/"+f for f in os.listdir(directory) if os.path.isfile(os.path.join(directory, f))]
+    allfiles = [os.path.splitext(f)[0] for f in allfiles]
+    indices = np.random.randint(len(allfiles), size=20)
+    for idx in indices:
+        f = allfiles[idx]
+        features = load_obj(f)
+        layer_count = 0
+        for key, value in features.iteritems():
+            fig = plt.figure()
+            feature = features[key].cpu().numpy()
+            vmin = np.min(feature)
+            vmax = np.max(feature)
+            num_channels = feature.shape[0]
+            side_size = int(np.ceil(np.sqrt(num_channels)))
+            for c in range(num_channels):
+                plt.subplot(side_size, side_size, c + 1)
+                plt.imshow(feature[c],  interpolation='none', cmap=plt.get_cmap('Greys'), vmin=vmin, vmax=vmax)
+                plt.tick_params(which='both', labelbottom=False, labelleft=False, bottom=False, top=False, left=False,
+                                right=False)
+            fig.suptitle(f+"_{}".format(layer_count))
+            fig.savefig(f.split('/')[0]+'/'+'{}_{}.pdf'.format(layer_count, f.split('/')[1]))
+            layer_count += 1
+
 
 # analyze statistics of features for a target class
 def feature_analyze_per_class(loader, label, model, criterion):
