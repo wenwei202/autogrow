@@ -9,6 +9,7 @@ import shutil
 import numpy as np
 import matplotlib.pyplot as plt
 import logging
+from datetime import datetime
 
 import torch
 import torch.nn as nn
@@ -186,10 +187,13 @@ def main():
             exit()
         mean_dir = args.workspace + "/"+ args.arch+"/mean_features"
         ratio_dir = args.workspace + "/"+ args.arch+"/ratio_features"
-        fig_dir = args.workspace + "/"+ args.arch+"/fig_features"
+        fig_mean_dir = args.workspace + "/"+ args.arch+"/fig_mean_features"
+        fig_ratio_dir = args.workspace + "/" + args.arch + "/fig_ratio_features"
         feature_analyze_all_classes(val_loader, model, criterion, directory=mean_dir)
         get_contri_ratios(from_dir=mean_dir, to_dir=ratio_dir)
-        plot_features(feature_dir=ratio_dir, fig_dir=fig_dir)
+        seed = datetime.now().microsecond
+        plot_features(feature_dir=mean_dir, fig_dir=fig_mean_dir, seed=seed)
+        plot_features(feature_dir=ratio_dir, fig_dir=fig_ratio_dir, seed=seed)
         logger.info("Done!")
         return
 
@@ -468,21 +472,22 @@ def get_contri_ratios(from_dir='mean_features', to_dir="ratio_features"):
             features[key] = features[key]/(vals_sum[key]+1.0e-8)
         save_obj(features, to_dir+"/"+f)
 
-def plot_features(feature_dir="ratio_features", fig_dir="fig_features", num_classes=1000):
-    logger.info("plotting contri ratios...")
+def plot_features(feature_dir="ratio_features", fig_dir="fig_features", seed=123):
+    logger.info("plotting features...")
 
     if not os.path.exists(feature_dir):
         logger.error("\t{} does not exist!".format(feature_dir))
         exit()
     if os.path.exists(fig_dir):
-        logger.warning("\t{} exists! Skipped.".format(fig_dir))
-        return
+        logger.warning("\t{} exists! Overwriting...".format(fig_dir))
     else:
         os.makedirs(fig_dir)
 
     allfiles = [f for f in os.listdir(feature_dir) if os.path.isfile(os.path.join(feature_dir, f))]
+    allfiles = sorted(allfiles)
     allfiles = [os.path.splitext(f)[0] for f in allfiles]
-    indices = np.random.randint(len(allfiles), size=10)
+    np.random.seed(seed)
+    indices = np.random.randint(len(allfiles), size=3)
     for idx in indices:
         f = allfiles[idx]
         logger.info("\tplotting {}".format(f))
@@ -499,6 +504,7 @@ def plot_features(feature_dir="ratio_features", fig_dir="fig_features", num_clas
             plt.hist(feature.flatten(), bins=200)
             plt.xlim(left=0)
             plt.xlim(right=vmax)
+            plt.tick_params(labelbottom=False, labeltop=True)
             for c in range(num_channels):
                 plt.subplot(side_size+1, side_size, c + 1 + side_size)
                 plt.imshow(feature[c],  interpolation='none', cmap=plt.get_cmap('Greys'), vmin=vmin, vmax=vmax)
