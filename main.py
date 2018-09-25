@@ -173,6 +173,8 @@ def main():
         num_workers=args.workers, pin_memory=True)
 
     if args.feature_analyze:
+        if args.gpu is None:
+            raise ValueError('Only single-gpu mode is supported in feature analysis')
         feature_analyze_all_classes(val_loader, model, criterion)
         get_contri_ratios()
         plot_contri_ratios()
@@ -442,9 +444,10 @@ def get_contri_ratios(directory='conv_features'):
         save_obj(features, f)
 
 def plot_contri_ratios(directory='conv_features', num_classes=1000):
+    print ("plotting contri ratios...")
     allfiles = [directory+"/"+f for f in os.listdir(directory) if os.path.isfile(os.path.join(directory, f))]
     allfiles = [os.path.splitext(f)[0] for f in allfiles]
-    indices = np.random.randint(len(allfiles), size=20)
+    indices = np.random.randint(len(allfiles), size=10)
     for idx in indices:
         f = allfiles[idx]
         features = load_obj(f)
@@ -456,8 +459,11 @@ def plot_contri_ratios(directory='conv_features', num_classes=1000):
             vmax = np.max(feature)
             num_channels = feature.shape[0]
             side_size = int(np.ceil(np.sqrt(num_channels)))
+            plt.subplot(side_size+1, 1, 1)
+            plt.hist(feature.flatten(), bins=200)
+            plt.xlim(left=0)
             for c in range(num_channels):
-                plt.subplot(side_size, side_size, c + 1)
+                plt.subplot(side_size+1, side_size, c + 1 + side_size)
                 plt.imshow(feature[c],  interpolation='none', cmap=plt.get_cmap('Greys'), vmin=vmin, vmax=vmax)
                 plt.tick_params(which='both', labelbottom=False, labelleft=False, bottom=False, top=False, left=False,
                                 right=False)
