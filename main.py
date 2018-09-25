@@ -8,6 +8,7 @@ import collections
 import shutil
 import numpy as np
 import matplotlib.pyplot as plt
+import logging
 
 import torch
 import torch.nn as nn
@@ -24,6 +25,11 @@ import torchvision.models as models
 model_names = sorted(name for name in models.__dict__
     if name.islower() and not name.startswith("__")
     and callable(models.__dict__[name]))
+
+# get logger
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger('main')
+logger.setLevel(logging.INFO)
 
 parser = argparse.ArgumentParser(description='PyTorch ImageNet Training')
 parser.add_argument('data', metavar='DIR',
@@ -55,6 +61,8 @@ parser.add_argument('-e', '--evaluate', dest='evaluate', action='store_true',
                     help='evaluate model on validation set')
 parser.add_argument('--feature-analyze', dest='feature_analyze', action='store_true',
                     help='analyze features')
+parser.add_argument('--workspace', default='myworkspace', type=str,
+                    help='the directory of workspace to save results')
 parser.add_argument('--pretrained', dest='pretrained', action='store_true',
                     help='use pre-trained model')
 parser.add_argument('--world-size', default=1, type=int,
@@ -97,10 +105,10 @@ def main():
 
     # create model
     if args.pretrained:
-        print("=> using pre-trained model '{}'".format(args.arch))
+        logger.info("=> using pre-trained model '{}'".format(args.arch))
         model = models.__dict__[args.arch](pretrained=True)
     else:
-        print("=> creating model '{}'".format(args.arch))
+        logger.info("=> creating model '{}'".format(args.arch))
         model = models.__dict__[args.arch]()
 
     if args.gpu is not None:
@@ -125,16 +133,16 @@ def main():
     # optionally resume from a checkpoint
     if args.resume:
         if os.path.isfile(args.resume):
-            print("=> loading checkpoint '{}'".format(args.resume))
+            logger.info("=> loading checkpoint '{}'".format(args.resume))
             checkpoint = torch.load(args.resume)
             args.start_epoch = checkpoint['epoch']
             best_prec1 = checkpoint['best_prec1']
             model.load_state_dict(checkpoint['state_dict'])
             optimizer.load_state_dict(checkpoint['optimizer'])
-            print("=> loaded checkpoint '{}' (epoch {})"
+            logger.info("=> loaded checkpoint '{}' (epoch {})"
                   .format(args.resume, checkpoint['epoch']))
         else:
-            print("=> no checkpoint found at '{}'".format(args.resume))
+            logger.info("=> no checkpoint found at '{}'".format(args.resume))
 
     cudnn.benchmark = True
 
@@ -174,10 +182,16 @@ def main():
 
     if args.feature_analyze:
         if args.gpu is None:
-            raise ValueError('Only single-gpu mode is supported in feature analysis')
-        feature_analyze_all_classes(val_loader, model, criterion)
-        get_contri_ratios()
-        plot_contri_ratios()
+            logger.error('Only single-gpu mode is supported in feature analysis')
+            exit()
+        mean_dir = args.workspace + "/"+ args.arch+"/mean_features"
+        ratio_dir = args.workspace + "/"+ args.arch+"/ratio_features"
+        fig_dir = args.workspace + "/"+ args.arch+"/fig_features"
+        feature_analyze_all_classes(val_loader, model, criterion, directory=mean_dir)
+        get_contri_ratios(from_dir=mean_dir, to_dir=ratio_dir)
+        plot_features(feature_dir=ratio_dir, fig_dir=fig_dir)
+        logger.info("Done!")
+        return
 
     if args.evaluate:
         validate(val_loader, model, criterion)
@@ -245,7 +259,7 @@ def train(train_loader, model, criterion, optimizer, epoch):
         end = time.time()
 
         if i % args.print_freq == 0:
-            print('Epoch: [{0}][{1}/{2}]\t'
+            logger.info('Epoch: [{0}][{1}/{2}]\t'
                   'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
                   'Data {data_time.val:.3f} ({data_time.avg:.3f})\t'
                   'Loss {loss.val:.4f} ({loss.avg:.4f})\t'
@@ -286,7 +300,7 @@ def validate(val_loader, model, criterion):
             end = time.time()
 
             if i % args.print_freq == 0:
-                print('Test: [{0}/{1}]\t'
+                logger.info('Test: [{0}/{1}]\t'
                       'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
                       'Loss {loss.val:.4f} ({loss.avg:.4f})\t'
                       'Prec@1 {top1.val:.3f} ({top1.avg:.3f})\t'
@@ -294,7 +308,7 @@ def validate(val_loader, model, criterion):
                        i, len(val_loader), batch_time=batch_time, loss=losses,
                        top1=top1, top5=top5))
 
-        print(' * Prec@1 {top1.avg:.3f} Prec@5 {top5.avg:.3f}'
+        logger.info(' * Prec@1 {top1.avg:.3f} Prec@5 {top5.avg:.3f}'
               .format(top1=top1, top5=top5))
 
     return top1.avg
@@ -311,12 +325,13 @@ def load_obj(name ):
 # for efficient execution:
 # ensure loader loads samples in the order of labels
 # that is, make sure shuffling is disable in the loader
-def feature_analyze_all_classes(loader, model, criterion, num_classes=1000):
+def feature_analyze_all_classes(loader, model, criterion, directory = 'mean_features', num_classes=1000):
     # add hook to store input features of each conv2d
-    directory = 'conv_features'
+    logger.info("Analyzing features of all classes...")
     if os.path.exists(directory):
-        shutil.rmtree(directory)
-    os.mkdir(directory)
+        logger.warning("\t{} exists! Skipped.".format(directory))
+        return
+    os.makedirs(directory)
     conv2d_inputs = collections.OrderedDict()
     def myhook(m, input, output):
         conv2d_inputs[id(m)] = torch.sum(torch.abs(input[0]), dim=0)
@@ -324,7 +339,7 @@ def feature_analyze_all_classes(loader, model, criterion, num_classes=1000):
     layer_names = []
     for idx, m in enumerate(model.named_modules()):
         if isinstance(m[1], nn.Conv2d):
-            print('{} registering hook...'.format(m[0]))
+            logger.info('\t{} registering hook...'.format(m[0]))
             h = m[1].register_forward_hook(hook=myhook)
             handles.append(h)
             layer_names.append(m[0])
@@ -392,14 +407,14 @@ def feature_analyze_all_classes(loader, model, criterion, num_classes=1000):
             end = time.time()
 
             if i % args.print_freq == 0:
-                print('Test: [{0}/{1}]\t'
+                logger.info('\tTest: [{0}/{1}]\t'
                       'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
                       'Loss {loss.val:.4f} ({loss.avg:.4f})\t'
                       'Prec@1 {top1.val:.3f} ({top1.avg:.3f})\t'
                       'Prec@5 {top5.val:.3f} ({top5.avg:.3f})'.format(
                        i, len(loader), batch_time=batch_time, loss=losses,
                        top1=top1, top5=top5))
-        print ("Totally {} images were processed".format(sum(counts)))
+        logger.info ("\tTotally {} images were processed".format(sum(counts)))
         print counts
         # averging
         allfiles = [directory + "/" + f for f in os.listdir(directory) if os.path.isfile(os.path.join(directory, f))]
@@ -412,7 +427,7 @@ def feature_analyze_all_classes(loader, model, criterion, num_classes=1000):
             save_obj(features, f)
 
         total_time.update(time.time() - start)
-        print(' * Prec@1 {top1.avg:.3f} Prec@5 {top5.avg:.3f} Time {total_time.avg:.3f}s'
+        logger.info('\t * Prec@1 {top1.avg:.3f} Prec@5 {top5.avg:.3f} Time {total_time.avg:.3f}s'
               .format(top1=top1, top5=top5, total_time=total_time))
 
     # remove hooks
@@ -422,35 +437,56 @@ def feature_analyze_all_classes(loader, model, criterion, num_classes=1000):
     return top1.avg
 
 
-def get_contri_ratios(directory='conv_features'):
-    allfiles = [directory+"/"+f for f in os.listdir(directory) if os.path.isfile(os.path.join(directory, f))]
+def get_contri_ratios(from_dir='mean_features', to_dir="ratio_features"):
+    logger.info("Getting the contribution ratios...")
+    if not os.path.exists(from_dir):
+        logger.error("\t{} does not exist!".format(from_dir))
+        exit()
+    if os.path.exists(to_dir):
+        logger.warning("\t{} exists! Skipped.".format(to_dir))
+        return
+    else:
+        os.makedirs(to_dir)
+
+    allfiles = [f for f in os.listdir(from_dir) if os.path.isfile(os.path.join(from_dir, f))]
     allfiles = [os.path.splitext(f)[0] for f in allfiles]
     vals_sum = None
-    print ("Getting the sum...")
+    logger.info("\tGetting the sum...")
     for f in allfiles:
         label = int(f.split("_")[-1])
         if vals_sum is None:
-            vals_sum = load_obj(f)
+            vals_sum = load_obj(from_dir+"/"+f)
         else:
-            features = load_obj(f)
+            features = load_obj(from_dir+"/"+f)
             for key, value in features.iteritems():
                 assert (key in vals_sum)
                 vals_sum[key] += features[key]
-    print ("Calculating the ratios...")
+    logger.info("\tCalculating the ratios...")
     for f in allfiles:
-        features = load_obj(f)
+        features = load_obj(from_dir+"/"+f)
         for key, value in features.iteritems():
             features[key] = features[key]/(vals_sum[key]+1.0e-8)
-        save_obj(features, f)
+        save_obj(features, to_dir+"/"+f)
 
-def plot_contri_ratios(directory='conv_features', num_classes=1000):
-    print ("plotting contri ratios...")
-    allfiles = [directory+"/"+f for f in os.listdir(directory) if os.path.isfile(os.path.join(directory, f))]
+def plot_features(feature_dir="ratio_features", fig_dir="fig_features", num_classes=1000):
+    logger.info("plotting contri ratios...")
+
+    if not os.path.exists(feature_dir):
+        logger.error("\t{} does not exist!".format(feature_dir))
+        exit()
+    if os.path.exists(fig_dir):
+        logger.warning("\t{} exists! Skipped.".format(fig_dir))
+        return
+    else:
+        os.makedirs(fig_dir)
+
+    allfiles = [f for f in os.listdir(feature_dir) if os.path.isfile(os.path.join(feature_dir, f))]
     allfiles = [os.path.splitext(f)[0] for f in allfiles]
     indices = np.random.randint(len(allfiles), size=10)
     for idx in indices:
         f = allfiles[idx]
-        features = load_obj(f)
+        logger.info("\tplotting {}".format(f))
+        features = load_obj(feature_dir+"/"+f)
         layer_count = 0
         for key, value in features.iteritems():
             fig = plt.figure()
@@ -462,13 +498,14 @@ def plot_contri_ratios(directory='conv_features', num_classes=1000):
             plt.subplot(side_size+1, 1, 1)
             plt.hist(feature.flatten(), bins=200)
             plt.xlim(left=0)
+            plt.xlim(right=vmax)
             for c in range(num_channels):
                 plt.subplot(side_size+1, side_size, c + 1 + side_size)
                 plt.imshow(feature[c],  interpolation='none', cmap=plt.get_cmap('Greys'), vmin=vmin, vmax=vmax)
                 plt.tick_params(which='both', labelbottom=False, labelleft=False, bottom=False, top=False, left=False,
                                 right=False)
-            fig.suptitle(f+"_{}".format(layer_count))
-            fig.savefig(f.split('/')[0]+'/'+'{}_{}.pdf'.format(layer_count, f.split('/')[1]))
+            fig.suptitle(feature_dir+"/"+f+"_{}".format(layer_count))
+            fig.savefig(fig_dir+"/"+'{}_{}.pdf'.format(layer_count, f))
             layer_count += 1
 
 
@@ -525,7 +562,7 @@ def feature_analyze_per_class(loader, label, model, criterion):
             end = time.time()
 
             if i % args.print_freq == 0:
-                print('Test: [{0}/{1}]\t'
+                logger.info('Test: [{0}/{1}]\t'
                       'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
                       'Loss {loss.val:.4f} ({loss.avg:.4f})\t'
                       'Prec@1 {top1.val:.3f} ({top1.avg:.3f})\t'
@@ -537,7 +574,7 @@ def feature_analyze_per_class(loader, label, model, criterion):
             input_one_class = None
             target_one_class = None
         total_time.update(time.time() - start)
-        print(' * Class {label} Prec@1 {top1.avg:.3f} Prec@5 {top5.avg:.3f} Time {total_time.avg:.3f}s'
+        logger.info(' * Class {label} Prec@1 {top1.avg:.3f} Prec@5 {top5.avg:.3f} Time {total_time.avg:.3f}s'
               .format(label=label, top1=top1, top5=top5, total_time=total_time))
 
     return top1.avg
