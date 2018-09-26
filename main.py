@@ -7,6 +7,7 @@ import pickle
 import collections
 import shutil
 import numpy as np
+import matplotlib
 import matplotlib.pyplot as plt
 import logging
 from datetime import datetime
@@ -189,11 +190,19 @@ def main():
         ratio_dir = args.workspace + "/"+ args.arch+"/ratio_features"
         fig_mean_dir = args.workspace + "/"+ args.arch+"/fig_mean_features"
         fig_ratio_dir = args.workspace + "/" + args.arch + "/fig_ratio_features"
+        mean_mask_dir = args.workspace + "/" + args.arch + "/mean_feature_masks"
+        ratio_mask_dir = args.workspace + "/" + args.arch + "/ratio_feature_masks"
+        fig_mean_mask_dir = args.workspace + "/" + args.arch + "/fig_mean_masks"
+        fig_ratio_mask_dir = args.workspace + "/" + args.arch + "/fig_ratio_masks"
         feature_analyze_all_classes(val_loader, model, criterion, directory=mean_dir)
         get_contri_ratios(from_dir=mean_dir, to_dir=ratio_dir)
         seed = datetime.now().microsecond
         plot_features(feature_dir=mean_dir, fig_dir=fig_mean_dir, seed=seed)
         plot_features(feature_dir=ratio_dir, fig_dir=fig_ratio_dir, seed=seed)
+        get_masks_by_norm(from_dir=mean_dir, to_dir=mean_mask_dir)
+        get_masks_by_norm(from_dir=ratio_dir, to_dir=ratio_mask_dir)
+        plot_features(feature_dir=mean_mask_dir, fig_dir=fig_mean_mask_dir, seed=seed)
+        plot_features(feature_dir=ratio_mask_dir, fig_dir=fig_ratio_mask_dir, seed=seed)
         logger.info("Done!")
         return
 
@@ -421,14 +430,13 @@ def feature_analyze_all_classes(loader, model, criterion, directory = 'mean_feat
         logger.info ("\tTotally {} images were processed".format(sum(counts)))
         print counts
         # averging
-        allfiles = [directory + "/" + f for f in os.listdir(directory) if os.path.isfile(os.path.join(directory, f))]
-        allfiles = [os.path.splitext(f)[0] for f in allfiles]
+        allfiles = sorted_filenames(directory)
         for f in allfiles:
             cur_label = int(f.split("_")[-1])
-            features = load_obj(f)
+            features = load_obj(directory + "/" + f)
             for key, value in features.iteritems():
                 features[key] = features[key] / counts[cur_label]
-            save_obj(features, f)
+            save_obj(features, directory + "/" + f)
 
         total_time.update(time.time() - start)
         logger.info('\t * Prec@1 {top1.avg:.3f} Prec@5 {top5.avg:.3f} Time {total_time.avg:.3f}s'
@@ -440,6 +448,11 @@ def feature_analyze_all_classes(loader, model, criterion, directory = 'mean_feat
 
     return top1.avg
 
+def sorted_filenames(dir):
+    allfiles = [f for f in os.listdir(dir) if os.path.isfile(os.path.join(dir, f))]
+    allfiles = sorted(allfiles)
+    allfiles = [os.path.splitext(f)[0] for f in allfiles]
+    return allfiles
 
 def get_contri_ratios(from_dir='mean_features', to_dir="ratio_features"):
     logger.info("Getting the contribution ratios...")
@@ -452,8 +465,7 @@ def get_contri_ratios(from_dir='mean_features', to_dir="ratio_features"):
     else:
         os.makedirs(to_dir)
 
-    allfiles = [f for f in os.listdir(from_dir) if os.path.isfile(os.path.join(from_dir, f))]
-    allfiles = [os.path.splitext(f)[0] for f in allfiles]
+    allfiles = sorted_filenames(from_dir)
     vals_sum = None
     logger.info("\tGetting the sum...")
     for f in allfiles:
@@ -483,9 +495,7 @@ def plot_features(feature_dir="ratio_features", fig_dir="fig_features", seed=123
     else:
         os.makedirs(fig_dir)
 
-    allfiles = [f for f in os.listdir(feature_dir) if os.path.isfile(os.path.join(feature_dir, f))]
-    allfiles = sorted(allfiles)
-    allfiles = [os.path.splitext(f)[0] for f in allfiles]
+    allfiles = sorted_filenames(feature_dir)
     np.random.seed(seed)
     indices = np.random.randint(len(allfiles), size=3)
     for idx in indices:
@@ -495,13 +505,13 @@ def plot_features(feature_dir="ratio_features", fig_dir="fig_features", seed=123
         layer_count = 0
         for key, value in features.iteritems():
             fig = plt.figure()
-            feature = features[key].cpu().numpy()
-            vmin = np.min(feature)
-            vmax = np.max(feature)
-            num_channels = feature.shape[0]
+            feature = features[key]
+            vmin = feature.min().cpu().numpy()
+            vmax = feature.max().cpu().numpy()
+            num_channels = feature.size()[0]
             side_size = int(np.ceil(np.sqrt(num_channels)))
             plt.subplot(side_size+1, 1, 1)
-            plt.hist(feature.flatten(), bins=200)
+            plt.hist(feature.cpu().numpy().flatten(), bins=200)
             plt.xlim(left=0)
             plt.xlim(right=vmax)
             plt.tick_params(labelbottom=False, labeltop=True)
@@ -514,6 +524,46 @@ def plot_features(feature_dir="ratio_features", fig_dir="fig_features", seed=123
             fig.savefig(fig_dir+"/"+'{}_{}.pdf'.format(layer_count, f))
             layer_count += 1
 
+def get_top_by_norm(input, ratio=0.8, p=2):
+    finput = input.reshape((-1,))
+    s = finput.size()[0]
+    target_sum = input.sum()
+
+def get_masks_by_norm(from_dir='mean_features', to_dir="feature_masks", ratio=0.8, p=2):
+    logger.info("Getting masks...")
+    if not os.path.exists(from_dir):
+        logger.error("\t{} does not exist!".format(from_dir))
+        exit()
+    if os.path.exists(to_dir):
+        logger.warning("\t{} exists! Skipped.".format(to_dir))
+        return
+    else:
+        os.makedirs(to_dir)
+
+    allfiles = sorted_filenames(from_dir)
+    for f in allfiles:
+        logger.info("\tProcessing {}".format(f))
+        features = load_obj(from_dir+"/"+f)
+        masks = collections.OrderedDict()
+        for key, value in features.iteritems():
+            vlen = torch.norm(value, p=p)
+            target_val = (ratio * vlen)**p
+            sorted_value, _ = torch.sort(value.reshape(-1).pow(p),descending=True)
+            left_idx = 0
+            right_idx = sorted_value.size()[0]-1
+            while right_idx > left_idx:
+                mid_idx = (right_idx + left_idx) / 2
+                mid_sum = torch.sum(sorted_value[0:mid_idx+1])
+                if abs(mid_sum - target_val)<1.0e-6:
+                    left_idx = mid_idx
+                    right_idx = mid_idx
+                elif mid_sum > target_val:
+                    right_idx = mid_idx - 1
+                else:
+                    left_idx = mid_idx + 1
+            threhold = sorted_value[left_idx] ** (1.0/p)
+            masks[key] = value.ge(threhold)
+        save_obj(masks, to_dir+"/"+f)
 
 # analyze statistics of features for a target class
 def feature_analyze_per_class(loader, label, model, criterion):
