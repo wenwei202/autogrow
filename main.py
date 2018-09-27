@@ -11,6 +11,7 @@ import matplotlib
 import matplotlib.pyplot as plt
 import logging
 from datetime import datetime
+from functools import partial
 
 import torch
 import torch.nn as nn
@@ -112,6 +113,22 @@ def main():
     else:
         logger.info("=> creating model '{}'".format(args.arch))
         model = models.__dict__[args.arch]()
+
+    # add hooks
+    g_masks = collections.OrderedDict()
+    if not args.feature_analyze:
+        tmp = torch.zeros(args.batch_size)
+        tmp = torch.chunk(tmp, torch.cuda.device_count())
+        strides = [t.size()[0] for t in tmp]
+        def myhook(m, input, name=None, strides=None):
+            device_idx = input[0].device.index
+            sidx = sum([s for s in strides[0:device_idx]])
+            eidx = sum([s for s in strides[0:device_idx+1]])
+            input.mul_(g_masks[name][sidx:eidx])
+        for idx, m in enumerate(model.named_modules()):
+            if isinstance(m[1], nn.Conv2d):
+                logger.info('\t{} registering hook...'.format(m[0]))
+                m[1].register_forward_pre_hook(hook=partial(myhook, name=m[0], strides=strides))
 
     if args.gpu is not None:
         model = model.cuda(args.gpu)
@@ -346,14 +363,14 @@ def feature_analyze_all_classes(loader, model, criterion, directory = 'mean_feat
         return
     os.makedirs(directory)
     conv2d_inputs = collections.OrderedDict()
-    def myhook(m, input, output):
-        conv2d_inputs[id(m)] = torch.sum(torch.abs(input[0]), dim=0)
+    def myhook(m, input, output, name=None):
+        conv2d_inputs[name] = torch.sum(torch.abs(input[0]), dim=0)
     handles = []
     layer_names = []
     for idx, m in enumerate(model.named_modules()):
         if isinstance(m[1], nn.Conv2d):
             logger.info('\t{} registering hook...'.format(m[0]))
-            h = m[1].register_forward_hook(hook=myhook)
+            h = m[1].register_forward_hook(hook=partial(myhook, name=m[0]))
             handles.append(h)
             layer_names.append(m[0])
 
