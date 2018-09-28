@@ -64,6 +64,8 @@ parser.add_argument('-e', '--evaluate', dest='evaluate', action='store_true',
                     help='evaluate model on validation set')
 parser.add_argument('--feature-analyze', dest='feature_analyze', action='store_true',
                     help='analyze features')
+parser.add_argument('--maskout', dest='maskout', action='store_true',
+                    help='whether use mask for training')
 parser.add_argument('--workspace', default='myworkspace', type=str,
                     help='the directory of workspace to save results')
 parser.add_argument('--pretrained', dest='pretrained', action='store_true',
@@ -115,8 +117,11 @@ def main():
         model = models.__dict__[args.arch]()
 
     # add hooks
-    g_masks = collections.OrderedDict()
-    if not args.feature_analyze:
+    g_mask_batch = collections.OrderedDict()
+    all_masks = None
+    mean_mask_dir = args.workspace + "/" + args.arch + "/mean_feature_masks"
+    ratio_mask_dir = args.workspace + "/" + args.arch + "/ratio_feature_masks"
+    if args.maskout:
         tmp = torch.zeros(args.batch_size)
         tmp = torch.chunk(tmp, torch.cuda.device_count())
         strides = [t.size()[0] for t in tmp]
@@ -124,11 +129,12 @@ def main():
             device_idx = input[0].device.index
             sidx = sum([s for s in strides[0:device_idx]])
             eidx = sum([s for s in strides[0:device_idx+1]])
-            input.mul_(g_masks[name][sidx:eidx])
+            input[0].mul_(g_mask_batch[name][sidx:eidx].cuda(input[0].device).float())
         for idx, m in enumerate(model.named_modules()):
             if isinstance(m[1], nn.Conv2d):
                 logger.info('\t{} registering hook...'.format(m[0]))
                 m[1].register_forward_pre_hook(hook=partial(myhook, name=m[0], strides=strides))
+        all_masks = get_all_masks(mean_mask_dir, num_classes=1000)
 
     if args.gpu is not None:
         model = model.cuda(args.gpu)
@@ -207,8 +213,6 @@ def main():
         ratio_dir = args.workspace + "/"+ args.arch+"/ratio_features"
         fig_mean_dir = args.workspace + "/"+ args.arch+"/fig_mean_features"
         fig_ratio_dir = args.workspace + "/" + args.arch + "/fig_ratio_features"
-        mean_mask_dir = args.workspace + "/" + args.arch + "/mean_feature_masks"
-        ratio_mask_dir = args.workspace + "/" + args.arch + "/ratio_feature_masks"
         fig_mean_mask_dir = args.workspace + "/" + args.arch + "/fig_mean_masks"
         fig_ratio_mask_dir = args.workspace + "/" + args.arch + "/fig_ratio_masks"
         feature_analyze_all_classes(val_loader, model, criterion, directory=mean_dir)
@@ -224,7 +228,7 @@ def main():
         return
 
     if args.evaluate:
-        validate(val_loader, model, criterion)
+        validate(val_loader, model, criterion, mask_batch_ptr=g_mask_batch, all_masks=all_masks)
         return
 
     for epoch in range(args.start_epoch, args.epochs):
@@ -236,7 +240,7 @@ def main():
         train(train_loader, model, criterion, optimizer, epoch)
 
         # evaluate on validation set
-        prec1 = validate(val_loader, model, criterion)
+        prec1 = validate(val_loader, model, criterion, mask_batch_ptr=g_mask_batch, all_masks=all_masks)
 
         # remember best prec@1 and save checkpoint
         is_best = prec1 > best_prec1
@@ -299,7 +303,7 @@ def train(train_loader, model, criterion, optimizer, epoch):
                    data_time=data_time, loss=losses, top1=top1, top5=top5))
 
 
-def validate(val_loader, model, criterion):
+def validate(val_loader, model, criterion, mask_batch_ptr=None, all_masks=None):
     batch_time = AverageMeter()
     losses = AverageMeter()
     top1 = AverageMeter()
@@ -311,6 +315,13 @@ def validate(val_loader, model, criterion):
     with torch.no_grad():
         end = time.time()
         for i, (input, target) in enumerate(val_loader):
+            # fetch masks
+            if (mask_batch_ptr is not None) and (all_masks is not None):
+                assert (args.maskout)
+                for layer, _ in all_masks.iteritems():
+                    maskb = [all_masks[layer][t] for t in target]
+                    mask_batch_ptr[layer] = torch.stack(maskb, dim=0)
+
             if args.gpu is not None:
                 input = input.cuda(args.gpu, non_blocking=True)
             target = target.cuda(args.gpu, non_blocking=True)
@@ -350,6 +361,35 @@ def save_obj(obj, name ):
 def load_obj(name ):
     with open(name + '.pkl', 'rb') as f:
         return pickle.load(f)
+
+
+# get masks for all classes
+# saving format: all_masks[layer_name][class_index]
+def get_all_masks(mask_dir, num_classes=1000):
+    logger.info("collecting feature masks from {}...".format(mask_dir))
+    if not os.path.exists(mask_dir):
+        logger.error("\t{} does not exist!".format(mask_dir))
+        exit()
+    all_masks = collections.OrderedDict()
+    allfiles = sorted_filenames(mask_dir)
+    assert (len(allfiles) == num_classes)
+    for f in allfiles:
+        logger.info("\tretrieving from {}".format(f))
+        cur_label = int(f.split("_")[-1])
+        mask = load_obj(mask_dir + "/" + f)
+        for key, value in mask.iteritems():
+            if key in all_masks:
+                assert (all_masks[key][cur_label] is None)
+            else:
+                all_masks[key] = [None] * num_classes
+            if num_classes > 100 or (args.gpu is None):
+                # Move to cpu to avoid OOM in GPUs when we have lots of classes
+                # In multi-gpu mode, we may copy from a CPU to GPUs
+                all_masks[key][cur_label] = value.cpu()
+            else:
+                all_masks[key][cur_label] = value
+    return all_masks
+
 
 # analyze statistics of features for all classes
 # for efficient execution:
