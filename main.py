@@ -68,6 +68,8 @@ parser.add_argument('--plot', dest='plot', action='store_true',
                     help='whether plot and save figures')
 parser.add_argument('--maskout', dest='maskout', action='store_true',
                     help='whether use mask for training')
+parser.add_argument('--skip-masks', default=0, type=int,
+                    metavar='N', help='How many first conv layers are skip in maskout(default: 0)')
 parser.add_argument('--workspace', default='myworkspace', type=str,
                     help='the directory of workspace to save results')
 parser.add_argument('--pretrained', dest='pretrained', action='store_true',
@@ -132,8 +134,12 @@ def main():
             sidx = sum([s for s in strides[0:device_idx]])
             eidx = sum([s for s in strides[0:device_idx+1]])
             input[0].mul_(g_mask_batch[name][sidx:eidx].cuda(input[0].device).float())
+        skip_count = 0
         for idx, m in enumerate(model.named_modules()):
             if isinstance(m[1], nn.Conv2d):
+                skip_count += 1
+                if skip_count <= args.skip_masks:
+                    continue
                 logger.info('\t{} registering hook...'.format(m[0]))
                 m[1].register_forward_pre_hook(hook=partial(myhook, name=m[0], strides=strides))
         all_masks = get_all_masks(mean_mask_dir, num_classes=1000)
