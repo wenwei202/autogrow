@@ -10,7 +10,7 @@ import numpy as np
 import matplotlib
 import matplotlib.pyplot as plt
 import logging
-from datetime import datetime
+import glob
 from functools import partial
 
 import torch
@@ -64,6 +64,8 @@ parser.add_argument('-e', '--evaluate', dest='evaluate', action='store_true',
                     help='evaluate model on validation set')
 parser.add_argument('--feature-analyze', dest='feature_analyze', action='store_true',
                     help='analyze features')
+parser.add_argument('--plot', dest='plot', action='store_true',
+                    help='whether plot and save figures')
 parser.add_argument('--maskout', dest='maskout', action='store_true',
                     help='whether use mask for training')
 parser.add_argument('--workspace', default='myworkspace', type=str,
@@ -176,15 +178,23 @@ def main():
     valdir = os.path.join(args.data, 'val')
     normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                      std=[0.229, 0.224, 0.225])
-
-    train_dataset = datasets.ImageFolder(
-        traindir,
-        transforms.Compose([
+    if args.feature_analyze:
+        transforms_composer = transforms.Compose([
+            transforms.Resize(256),
+            transforms.CenterCrop(224),
+            transforms.ToTensor(),
+            normalize,
+        ])
+    else:
+        transforms_composer = transforms.Compose([
             transforms.RandomResizedCrop(224),
             transforms.RandomHorizontalFlip(),
             transforms.ToTensor(),
             normalize,
-        ]))
+        ])
+    train_dataset = datasets.ImageFolder(
+        traindir,
+        transforms_composer)
 
     if args.distributed:
         train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
@@ -192,7 +202,7 @@ def main():
         train_sampler = None
 
     train_loader = torch.utils.data.DataLoader(
-        train_dataset, batch_size=args.batch_size, shuffle=(train_sampler is None),
+        train_dataset, batch_size=args.batch_size, shuffle=False if args.feature_analyze else (train_sampler is None),
         num_workers=args.workers, pin_memory=True, sampler=train_sampler)
 
     val_loader = torch.utils.data.DataLoader(
@@ -217,13 +227,14 @@ def main():
         fig_ratio_mask_dir = args.workspace + "/" + args.arch + "/fig_ratio_masks"
         feature_analyze_all_classes(train_loader, model, criterion, directory=mean_dir)
         get_contri_ratios(from_dir=mean_dir, to_dir=ratio_dir)
-        seed = datetime.now().microsecond
-        plot_features(feature_dir=mean_dir, fig_dir=fig_mean_dir, seed=seed)
-        plot_features(feature_dir=ratio_dir, fig_dir=fig_ratio_dir, seed=seed)
+        if args.plot:
+            plot_features(feature_dir=mean_dir, fig_dir=fig_mean_dir)
+            plot_features(feature_dir=ratio_dir, fig_dir=fig_ratio_dir)
         get_masks_by_norm(from_dir=mean_dir, to_dir=mean_mask_dir)
         get_masks_by_norm(from_dir=ratio_dir, to_dir=ratio_mask_dir)
-        plot_features(feature_dir=mean_mask_dir, fig_dir=fig_mean_mask_dir, seed=seed)
-        plot_features(feature_dir=ratio_mask_dir, fig_dir=fig_ratio_mask_dir, seed=seed)
+        if args.plot:
+            plot_features(feature_dir=mean_mask_dir, fig_dir=fig_mean_mask_dir)
+            plot_features(feature_dir=ratio_mask_dir, fig_dir=fig_ratio_mask_dir)
         logger.info("Done!")
         return
 
@@ -541,23 +552,29 @@ def get_contri_ratios(from_dir='mean_features', to_dir="ratio_features"):
             features[key] = features[key]/(vals_sum[key]+1.0e-8)
         save_obj(features, to_dir+"/"+f)
 
-def plot_features(feature_dir="ratio_features", fig_dir="fig_features", seed=123):
-    logger.info("plotting features...")
+def plot_features(feature_dir="ratio_features", fig_dir="fig_features", num=3):
+    logger.info("plotting features to {}...".format(fig_dir))
 
     if not os.path.exists(feature_dir):
         logger.error("\t{} does not exist!".format(feature_dir))
         exit()
     if os.path.exists(fig_dir):
-        logger.warning("\t{} exists! Overwriting...".format(fig_dir))
+        logger.warning("\t{} exists! Adding new...".format(fig_dir))
     else:
         os.makedirs(fig_dir)
 
     allfiles = sorted_filenames(feature_dir)
-    np.random.seed(seed)
-    indices = np.random.randint(len(allfiles), size=3)
+    indices = range(len(allfiles))
+    plot_count = 0
     for idx in indices:
+        if plot_count == num:
+            break
         f = allfiles[idx]
+        if glob.glob(fig_dir+"/"+'*{}.pdf'.format(f)):
+            continue
+
         logger.info("\tplotting {}".format(f))
+        plot_count += 1
         features = load_obj(feature_dir+"/"+f)
         layer_count = 0
         for key, value in features.iteritems():
