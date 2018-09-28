@@ -215,7 +215,7 @@ def main():
         fig_ratio_dir = args.workspace + "/" + args.arch + "/fig_ratio_features"
         fig_mean_mask_dir = args.workspace + "/" + args.arch + "/fig_mean_masks"
         fig_ratio_mask_dir = args.workspace + "/" + args.arch + "/fig_ratio_masks"
-        feature_analyze_all_classes(val_loader, model, criterion, directory=mean_dir)
+        feature_analyze_all_classes(train_loader, model, criterion, directory=mean_dir)
         get_contri_ratios(from_dir=mean_dir, to_dir=ratio_dir)
         seed = datetime.now().microsecond
         plot_features(feature_dir=mean_dir, fig_dir=fig_mean_dir, seed=seed)
