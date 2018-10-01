@@ -7,8 +7,8 @@ import pickle
 import collections
 import shutil
 import numpy as np
-import matplotlib
 import matplotlib.pyplot as plt
+from matplotlib import gridspec
 import logging
 import glob
 from functools import partial
@@ -142,7 +142,7 @@ def main():
                     continue
                 logger.info('\t{} registering hook...'.format(m[0]))
                 m[1].register_forward_pre_hook(hook=partial(myhook, name=m[0], strides=strides))
-        all_masks = get_all_masks(mean_mask_dir, num_classes=1000)
+        all_masks = get_all_masks(ratio_mask_dir)
 
     if args.gpu is not None:
         model = model.cuda(args.gpu)
@@ -236,8 +236,13 @@ def main():
         if args.plot:
             plot_features(feature_dir=mean_dir, fig_dir=fig_mean_dir)
             plot_features(feature_dir=ratio_dir, fig_dir=fig_ratio_dir)
+
         get_masks_by_norm(from_dir=mean_dir, to_dir=mean_mask_dir)
         get_masks_by_norm(from_dir=ratio_dir, to_dir=ratio_mask_dir)
+
+        analyze_masks(mean_mask_dir, fig_mean_mask_dir)
+        analyze_masks(ratio_mask_dir, fig_ratio_mask_dir)
+
         if args.plot:
             plot_features(feature_dir=mean_mask_dir, fig_dir=fig_mean_mask_dir)
             plot_features(feature_dir=ratio_mask_dir, fig_dir=fig_ratio_mask_dir)
@@ -391,7 +396,6 @@ def get_all_masks(mask_dir, num_classes=1000):
     allfiles = sorted_filenames(mask_dir)
     assert (len(allfiles) == num_classes)
     for f in allfiles:
-        logger.info("\tretrieving from {}".format(f))
         cur_label = int(f.split("_")[-1])
         mask = load_obj(mask_dir + "/" + f)
         for key, value in mask.iteritems():
@@ -406,6 +410,52 @@ def get_all_masks(mask_dir, num_classes=1000):
             else:
                 all_masks[key][cur_label] = value
     return all_masks
+
+def analyze_masks(mask_dir, fig_dir, downsample_rate=10):
+    allmasks = get_all_masks(mask_dir)
+    logger.info("analyzing feature masks in {}...".format(mask_dir))
+    if os.path.exists(fig_dir):
+        logger.warning("\t{} exists! Adding new...".format(fig_dir))
+    else:
+        os.makedirs(fig_dir)
+
+    for layer, masks in allmasks.iteritems():
+        logger.info("\tlayer {}...".format(layer))
+        num_class = len(masks)
+        similarity = np.zeros((num_class, num_class))
+        num_ones = 0.0
+
+        # OOM risk
+        for idx, mask in enumerate(masks):
+            masks[idx] = mask.cuda()
+
+        for idx1, mask1 in enumerate(masks):
+            num_ones += torch.sum(mask1).cpu()
+            for idx2, mask2 in enumerate(masks):
+                similarity[idx1][idx2] = torch.sum((mask1 == mask2)*mask1).cpu()
+        # plot
+        sparsity = 1.0 - float(num_ones)/num_class/masks[0].numel()
+        fig = plt.figure()
+        vmin = 0
+        vmax = similarity.max()
+        gs = gridspec.GridSpec(2, 1, height_ratios=[1, 5])
+        ax0 = plt.subplot(gs[0])
+        ax0.hist(similarity.flatten(), bins=200)
+        plt.xlim(left=0)
+        plt.xlim(right=vmax)
+        plt.tick_params(labelbottom=False, labeltop=True)
+        ax1 = plt.subplot(gs[1])
+        ax1.imshow(similarity[0::downsample_rate, 0::downsample_rate], interpolation='none', cmap=plt.get_cmap('Greys'), vmin=vmin)
+        plt.tick_params(which='both',
+                        labelbottom=False,
+                        labelleft=False,
+                        bottom=False,
+                        top=False,
+                        left=False,
+                        right=False,
+                    )
+        plt.title(mask_dir + " layer:{} sparsity:{}".format(layer, sparsity))
+        fig.savefig(fig_dir + "/" + '{}_similarity.pdf'.format(layer))
 
 
 # analyze statistics of features for all classes
