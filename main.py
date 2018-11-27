@@ -121,8 +121,8 @@ def main():
         model = models.__dict__[args.arch]()
 
     # add hooks
-    g_mask_batch = collections.OrderedDict()
-    all_masks = None
+    g_mask_batch = collections.OrderedDict() # masks per batch
+    all_masks = None # masks of all labels
     mean_mask_dir = args.workspace + "/" + args.arch + "/mean_feature_masks"
     ratio_mask_dir = args.workspace + "/" + args.arch + "/ratio_feature_masks"
     if args.maskout:
@@ -142,7 +142,7 @@ def main():
                     continue
                 logger.info('\t{} registering hook...'.format(m[0]))
                 m[1].register_forward_pre_hook(hook=partial(myhook, name=m[0], strides=strides))
-        all_masks = get_all_masks(ratio_mask_dir)
+        all_masks = get_all_masks(mean_mask_dir)
 
     if args.gpu is not None:
         model = model.cuda(args.gpu)
@@ -411,7 +411,7 @@ def get_all_masks(mask_dir, num_classes=1000):
                 all_masks[key][cur_label] = value
     return all_masks
 
-def analyze_masks(mask_dir, fig_dir, downsample_rate=10):
+def analyze_masks(mask_dir, fig_dir, downsample_rate=1):
     allmasks = get_all_masks(mask_dir)
     logger.info("analyzing feature masks in {}...".format(mask_dir))
     if os.path.exists(fig_dir):
@@ -426,15 +426,26 @@ def analyze_masks(mask_dir, fig_dir, downsample_rate=10):
         num_ones = 0.0
 
         # OOM risk
-        for idx, mask in enumerate(masks):
-            masks[idx] = mask.cuda()
+        # for idx, mask in enumerate(masks):
+        #     masks[idx] = mask.cuda()
+
+        # print("Sparsity:")
+        one_cnts = []
+        for idx1, mask1 in enumerate(masks):
+            mask1 = mask1.cuda()
+            one_cnt = torch.sum(mask1).cpu().float()
+            num_ones += one_cnt
+            # print("\tclass {}: {}".format(idx1, 1.0 - one_cnt / mask1.numel()))
+            one_cnts.append(one_cnt)
 
         for idx1, mask1 in enumerate(masks):
-            num_ones += torch.sum(mask1).cpu()
             for idx2, mask2 in enumerate(masks):
-                similarity[idx1][idx2] = torch.sum((mask1 == mask2)*mask1).cpu()
+                mask1 = mask1.cuda()
+                mask2 = mask2.cuda()
+                mcnt = torch.sum((mask1 == mask2)*mask1).cpu().float()
+                similarity[idx1][idx2] = 0.5*mcnt/one_cnts[idx1] + 0.5*mcnt/one_cnts[idx2]
         # plot
-        sparsity = 1.0 - float(num_ones)/num_class/masks[0].numel()
+        sparsity = 1.0 - num_ones/num_class/masks[0].numel()
         fig = plt.figure()
         vmin = 0
         vmax = similarity.max()
