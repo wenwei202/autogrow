@@ -12,7 +12,15 @@ from matplotlib import gridspec
 import logging
 import glob
 from functools import partial
-
+def partial(func, *args, **keywords):
+    def newfunc(*fargs, **fkeywords):
+        newkeywords = keywords.copy()
+        newkeywords.update(fkeywords)
+        return func(*(args + fargs), **newkeywords)
+    newfunc.func = func
+    newfunc.args = args
+    newfunc.keywords = keywords
+    return newfunc
 import torch
 import torch.nn as nn
 import torch.nn.parallel
@@ -88,7 +96,7 @@ parser.add_argument('--gpu', default=None, type=int,
 best_prec1 = 0
 
 # add masking hooks to model
-def add_hooks(model, mask_dict):
+def add_forward_hooks(model, mask_dict):
     tmp = torch.zeros(args.batch_size)
     tmp = torch.chunk(tmp, torch.cuda.device_count())
     strides = [t.size()[0] for t in tmp]
@@ -106,8 +114,36 @@ def add_hooks(model, mask_dict):
             skip_count += 1
             if skip_count <= args.skip_masks:
                 continue
-            logger.info('\t{} registering hook...'.format(m[0]))
+            logger.info('\t{} registering forward hook...'.format(m[0]))
             h = m[1].register_forward_pre_hook(hook=partial(myhook, name=m[0], strides=strides))
+            handles.append(h)
+    return handles
+
+def add_backward_hooks(model, mask_dict):
+    logger.error("Not tested yet!")
+    exit(-1)
+
+    tmp = torch.zeros(args.batch_size)
+    tmp = torch.chunk(tmp, torch.cuda.device_count())
+    strides = [t.size()[0] for t in tmp]
+
+    def myhook(m, grad_input, grad_output, name=None, strides=None):
+        # print grad_input[0].size(), grad_input[1].size(), grad_input[2].size()
+        device_idx = grad_input[0].device.index
+        sidx = sum([s for s in strides[0:device_idx]])
+        eidx = sum([s for s in strides[0:device_idx + 1]])
+        masked_grad_input = torch.mul(grad_input[0], mask_dict[name][sidx:eidx].cuda(grad_input[0].device).float())
+        return (masked_grad_input, grad_input[1], grad_input[2])
+
+    handles = []
+    skip_count = 0
+    for idx, m in enumerate(model.named_modules()):
+        if isinstance(m[1], nn.Conv2d):
+            skip_count += 1
+            if skip_count <= args.skip_masks:
+                continue
+            logger.info('\t{} registering backward hook...'.format(m[0]))
+            h = m[1].register_backward_hook(hook=partial(myhook, name=m[0], strides=strides))
             handles.append(h)
     return handles
 
@@ -153,11 +189,8 @@ def main():
     mean_mask_dir = args.workspace + "/" + args.arch + "/mean_feature_masks"
     ratio_mask_dir = args.workspace + "/" + args.arch + "/ratio_feature_masks"
     if args.maskout:
-        if args.gpu is not None:
-            logger.error("Please remove --gpu in training model. Use CUDA_VISIBLE_DEVICES for a single GPU mode.")
-            exit(-1)
         all_masks = get_all_masks(mean_mask_dir)
-        #all_masks = get_all_masks(ratio_mask_dir)
+        # all_masks = get_all_masks(ratio_mask_dir)
 
     if args.gpu is not None:
         model = model.cuda(args.gpu)
@@ -265,6 +298,8 @@ def main():
         return
 
     if args.evaluate:
+        # all_masks = get_all_masks(mean_mask_dir)
+        # add_forward_hooks(model, g_mask_batch)
         # validate(val_loader, model, criterion, mask_batch_ptr=g_mask_batch, all_masks=all_masks)
         validate(val_loader, model, criterion)
         return
@@ -274,14 +309,8 @@ def main():
             train_sampler.set_epoch(epoch)
         adjust_learning_rate(optimizer, epoch)
 
-        # add hooks for training
-        hook_handles = add_hooks(model, g_mask_batch)
         # train for one epoch
-        # train(train_loader, model, criterion, optimizer, epoch)
-        train(train_loader, model, criterion, optimizer, epoch, mask_batch_ptr=g_mask_batch, all_masks=all_masks)
-
-        # remove hooks for validation
-        remove_hooks(hook_handles)
+        train(train_loader, model, criterion, optimizer, epoch)
 
         # evaluate on validation set
         prec1 = validate(val_loader, model, criterion)
