@@ -76,6 +76,8 @@ parser.add_argument('--plot', dest='plot', action='store_true',
                     help='whether plot and save figures')
 parser.add_argument('--maskout', dest='maskout', action='store_true',
                     help='whether use mask for training')
+parser.add_argument('--feature-reg', '--fr', default=1e-8, type=float,
+                    metavar='W', help='neuron inhibition and excitation')
 parser.add_argument('--skip-masks', default=1, type=int,
                     metavar='N', help='How many first conv layers are skip in maskout(default: 1)')
 parser.add_argument('--workspace', default='myworkspace', type=str,
@@ -120,9 +122,6 @@ def add_forward_hooks(model, mask_dict):
     return handles
 
 def add_backward_hooks(model, mask_dict):
-    logger.error("Not tested yet!")
-    exit(-1)
-
     tmp = torch.zeros(args.batch_size)
     tmp = torch.chunk(tmp, torch.cuda.device_count())
     strides = [t.size()[0] for t in tmp]
@@ -132,7 +131,8 @@ def add_backward_hooks(model, mask_dict):
         device_idx = grad_input[0].device.index
         sidx = sum([s for s in strides[0:device_idx]])
         eidx = sum([s for s in strides[0:device_idx + 1]])
-        masked_grad_input = torch.mul(grad_input[0], mask_dict[name][sidx:eidx].cuda(grad_input[0].device).float())
+        mask_subbatch = mask_dict[name][sidx:eidx].cuda(grad_input[0].device).float()
+        masked_grad_input = grad_input[0] + (1.0 - mask_subbatch) * args.feature_reg
         return (masked_grad_input, grad_input[1], grad_input[2])
 
     handles = []
@@ -310,7 +310,13 @@ def main():
         adjust_learning_rate(optimizer, epoch)
 
         # train for one epoch
-        train(train_loader, model, criterion, optimizer, epoch)
+        # add hooks
+        if args.maskout:
+            bwd_hs = add_backward_hooks(model, g_mask_batch)
+            train(train_loader, model, criterion, optimizer, epoch, mask_batch_ptr=g_mask_batch, all_masks=all_masks)
+            remove_hooks(bwd_hs)
+        else:
+            train(train_loader, model, criterion, optimizer, epoch)
 
         # evaluate on validation set
         prec1 = validate(val_loader, model, criterion)
