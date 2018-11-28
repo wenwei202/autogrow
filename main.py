@@ -68,8 +68,8 @@ parser.add_argument('--plot', dest='plot', action='store_true',
                     help='whether plot and save figures')
 parser.add_argument('--maskout', dest='maskout', action='store_true',
                     help='whether use mask for training')
-parser.add_argument('--skip-masks', default=0, type=int,
-                    metavar='N', help='How many first conv layers are skip in maskout(default: 0)')
+parser.add_argument('--skip-masks', default=1, type=int,
+                    metavar='N', help='How many first conv layers are skip in maskout(default: 1)')
 parser.add_argument('--workspace', default='myworkspace', type=str,
                     help='the directory of workspace to save results')
 parser.add_argument('--pretrained', dest='pretrained', action='store_true',
@@ -153,7 +153,11 @@ def main():
     mean_mask_dir = args.workspace + "/" + args.arch + "/mean_feature_masks"
     ratio_mask_dir = args.workspace + "/" + args.arch + "/ratio_feature_masks"
     if args.maskout:
+        if args.gpu is not None:
+            logger.error("Please remove --gpu in training model. Use CUDA_VISIBLE_DEVICES for a single GPU mode.")
+            exit(-1)
         all_masks = get_all_masks(mean_mask_dir)
+        #all_masks = get_all_masks(ratio_mask_dir)
 
     if args.gpu is not None:
         model = model.cuda(args.gpu)
