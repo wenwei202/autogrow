@@ -87,6 +87,33 @@ parser.add_argument('--gpu', default=None, type=int,
 
 best_prec1 = 0
 
+# add masking hooks to model
+def add_hooks(model, mask_dict):
+    tmp = torch.zeros(args.batch_size)
+    tmp = torch.chunk(tmp, torch.cuda.device_count())
+    strides = [t.size()[0] for t in tmp]
+
+    def myhook(m, input, name=None, strides=None):
+        device_idx = input[0].device.index
+        sidx = sum([s for s in strides[0:device_idx]])
+        eidx = sum([s for s in strides[0:device_idx + 1]])
+        input[0].mul_(mask_dict[name][sidx:eidx].cuda(input[0].device).float())
+
+    handles = []
+    skip_count = 0
+    for idx, m in enumerate(model.named_modules()):
+        if isinstance(m[1], nn.Conv2d):
+            skip_count += 1
+            if skip_count <= args.skip_masks:
+                continue
+            logger.info('\t{} registering hook...'.format(m[0]))
+            h = m[1].register_forward_pre_hook(hook=partial(myhook, name=m[0], strides=strides))
+            handles.append(h)
+    return handles
+
+def remove_hooks(hs):
+    for h in hs:
+        h.remove()
 
 def main():
     global args, best_prec1
@@ -126,22 +153,6 @@ def main():
     mean_mask_dir = args.workspace + "/" + args.arch + "/mean_feature_masks"
     ratio_mask_dir = args.workspace + "/" + args.arch + "/ratio_feature_masks"
     if args.maskout:
-        tmp = torch.zeros(args.batch_size)
-        tmp = torch.chunk(tmp, torch.cuda.device_count())
-        strides = [t.size()[0] for t in tmp]
-        def myhook(m, input, name=None, strides=None):
-            device_idx = input[0].device.index
-            sidx = sum([s for s in strides[0:device_idx]])
-            eidx = sum([s for s in strides[0:device_idx+1]])
-            input[0].mul_(g_mask_batch[name][sidx:eidx].cuda(input[0].device).float())
-        skip_count = 0
-        for idx, m in enumerate(model.named_modules()):
-            if isinstance(m[1], nn.Conv2d):
-                skip_count += 1
-                if skip_count <= args.skip_masks:
-                    continue
-                logger.info('\t{} registering hook...'.format(m[0]))
-                m[1].register_forward_pre_hook(hook=partial(myhook, name=m[0], strides=strides))
         all_masks = get_all_masks(mean_mask_dir)
 
     if args.gpu is not None:
@@ -250,7 +261,8 @@ def main():
         return
 
     if args.evaluate:
-        validate(val_loader, model, criterion, mask_batch_ptr=g_mask_batch, all_masks=all_masks)
+        # validate(val_loader, model, criterion, mask_batch_ptr=g_mask_batch, all_masks=all_masks)
+        validate(val_loader, model, criterion)
         return
 
     for epoch in range(args.start_epoch, args.epochs):
@@ -258,11 +270,17 @@ def main():
             train_sampler.set_epoch(epoch)
         adjust_learning_rate(optimizer, epoch)
 
+        # add hooks for training
+        hook_handles = add_hooks(model, g_mask_batch)
         # train for one epoch
-        train(train_loader, model, criterion, optimizer, epoch)
+        # train(train_loader, model, criterion, optimizer, epoch)
+        train(train_loader, model, criterion, optimizer, epoch, mask_batch_ptr=g_mask_batch, all_masks=all_masks)
+
+        # remove hooks for validation
+        remove_hooks(hook_handles)
 
         # evaluate on validation set
-        prec1 = validate(val_loader, model, criterion, mask_batch_ptr=g_mask_batch, all_masks=all_masks)
+        prec1 = validate(val_loader, model, criterion)
 
         # remember best prec@1 and save checkpoint
         is_best = prec1 > best_prec1
@@ -276,7 +294,7 @@ def main():
         }, is_best)
 
 
-def train(train_loader, model, criterion, optimizer, epoch):
+def train(train_loader, model, criterion, optimizer, epoch, mask_batch_ptr=None, all_masks=None):
     batch_time = AverageMeter()
     data_time = AverageMeter()
     losses = AverageMeter()
@@ -288,6 +306,12 @@ def train(train_loader, model, criterion, optimizer, epoch):
 
     end = time.time()
     for i, (input, target) in enumerate(train_loader):
+        # feed masks per batch to hooks
+        if (mask_batch_ptr is not None) and (all_masks is not None):
+            for layer, _ in all_masks.iteritems():
+                maskb = [all_masks[layer][t] for t in target]
+                mask_batch_ptr[layer] = torch.stack(maskb, dim=0)
+
         # measure data loading time
         data_time.update(time.time() - end)
 
@@ -339,7 +363,6 @@ def validate(val_loader, model, criterion, mask_batch_ptr=None, all_masks=None):
         for i, (input, target) in enumerate(val_loader):
             # fetch masks
             if (mask_batch_ptr is not None) and (all_masks is not None):
-                assert (args.maskout)
                 for layer, _ in all_masks.iteritems():
                     maskb = [all_masks[layer][t] for t in target]
                     mask_batch_ptr[layer] = torch.stack(maskb, dim=0)
