@@ -7,6 +7,8 @@ import pickle
 import collections
 import shutil
 import numpy as np
+import matplotlib
+matplotlib.use("pdf")
 import matplotlib.pyplot as plt
 from matplotlib import gridspec
 import logging
