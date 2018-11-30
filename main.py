@@ -11,6 +11,7 @@ import matplotlib.pyplot as plt
 from matplotlib import gridspec
 import logging
 import glob
+from datetime import datetime
 from functools import partial
 def partial(func, *args, **keywords):
     def newfunc(*fargs, **fkeywords):
@@ -38,9 +39,9 @@ model_names = sorted(name for name in models.__dict__
     and callable(models.__dict__[name]))
 
 # get logger
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger('main')
-logger.setLevel(logging.INFO)
+# logging.basicConfig(level=logging.INFO)
+# logger = logging.getLogger('main')
+# logger.setLevel(logging.INFO)
 
 parser = argparse.ArgumentParser(description='PyTorch ImageNet Training')
 parser.add_argument('data', metavar='DIR',
@@ -102,6 +103,7 @@ parser.add_argument('--gpu', default=None, type=int,
                     help='GPU id to use.')
 
 best_prec1 = 0
+logger = None
 
 # register forward hooks
 # myhook is func(m, input, module_name)
@@ -204,6 +206,21 @@ def remove_hooks(hs):
 def main():
     global args, best_prec1
     args = parser.parse_args()
+
+    if args.evaluate or args.feature_analyze:
+        save_path = '/tmp'
+    else:
+        save_path = os.path.join('./results', datetime.now().strftime('%Y-%m-%d_%H-%M-%S'))
+        if not os.path.exists(save_path):
+            os.makedirs(save_path)
+        else:
+            raise OSError('Directory {%s} exists. Use a new one.' % save_path)
+    logging.basicConfig(filename=os.path.join(save_path, 'log.txt'), level=logging.INFO)
+    global logger
+    logger = logging.getLogger('main')
+    logger.addHandler(logging.StreamHandler())
+    logger.info("Saving to %s", save_path)
+    logger.info("Running arguments: %s", args)
 
     if args.seed is not None:
         random.seed(args.seed)
@@ -384,7 +401,7 @@ def main():
             'state_dict': model.state_dict(),
             'best_prec1': best_prec1,
             'optimizer' : optimizer.state_dict(),
-        }, is_best)
+        }, is_best, path=save_path)
 
 
 def train(train_loader, model, criterion, optimizer, epoch, mask_batch_ptr=None, all_masks=None):
@@ -679,7 +696,6 @@ def feature_analyze_all_classes(loader, model, criterion, directory = 'mean_feat
                        i, len(loader), batch_time=batch_time, loss=losses,
                        top1=top1, top5=top5))
         logger.info ("\tTotally {} images were processed".format(sum(counts)))
-        print counts
         # averging
         allfiles = sorted_filenames(directory)
         for f in allfiles:
@@ -892,10 +908,11 @@ def feature_analyze_per_class(loader, label, model, criterion):
 
     return top1.avg
 
-def save_checkpoint(state, is_best, filename='checkpoint.pth.tar'):
+def save_checkpoint(state, is_best, path='./', filename='checkpoint.pth.tar'):
+    filename = os.path.join(path, filename)
     torch.save(state, filename)
     if is_best:
-        shutil.copyfile(filename, 'model_best.pth.tar')
+        shutil.copyfile(filename, os.path.join(path, 'model_best.pth.tar'))
 
 
 class AverageMeter(object):
