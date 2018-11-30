@@ -70,6 +70,8 @@ parser.add_argument('--resume', default='', type=str, metavar='PATH',
                     help='path to latest checkpoint (default: none)')
 parser.add_argument('-e', '--evaluate', dest='evaluate', action='store_true',
                     help='evaluate model on validation set')
+
+# new arguments
 parser.add_argument('--feature-analyze', dest='feature_analyze', action='store_true',
                     help='analyze features')
 parser.add_argument('--plot', dest='plot', action='store_true',
@@ -78,10 +80,14 @@ parser.add_argument('--maskout', dest='maskout', action='store_true',
                     help='whether use mask for training')
 parser.add_argument('--feature-reg', '--fr', default=1e-8, type=float,
                     metavar='W', help='neuron inhibition and excitation')
+parser.add_argument('--feature-threshold', '--ft', default=5e-3, type=float,
+                    metavar='W', help='threshold to inhibit neurons')
 parser.add_argument('--skip-masks', default=1, type=int,
                     metavar='N', help='How many first conv layers are skip in maskout(default: 1)')
 parser.add_argument('--workspace', default='myworkspace', type=str,
                     help='the directory of workspace to save results')
+
+
 parser.add_argument('--pretrained', dest='pretrained', action='store_true',
                     help='use pre-trained model')
 parser.add_argument('--world-size', default=1, type=int,
@@ -97,8 +103,23 @@ parser.add_argument('--gpu', default=None, type=int,
 
 best_prec1 = 0
 
+# register forward hooks
+# myhook is func(m, input, module_name)
+def _register_forward_hooks(model, hook):
+    handles = []
+    skip_count = 0
+    for idx, m in enumerate(model.named_modules()):
+        if isinstance(m[1], nn.Conv2d):
+            skip_count += 1
+            if skip_count <= args.skip_masks:
+                continue
+            logger.info('\t{} registering forward hook...'.format(m[0]))
+            h = m[1].register_forward_pre_hook(hook=partial(hook, name=m[0]))
+            handles.append(h)
+    return handles
+
 # add masking hooks to model
-def add_forward_hooks(model, mask_dict):
+def add_forward_masks(model, mask_dict):
     tmp = torch.zeros(args.batch_size)
     tmp = torch.chunk(tmp, torch.cuda.device_count())
     strides = [t.size()[0] for t in tmp]
@@ -109,16 +130,37 @@ def add_forward_hooks(model, mask_dict):
         eidx = sum([s for s in strides[0:device_idx + 1]])
         input[0].mul_(mask_dict[name][sidx:eidx].cuda(input[0].device).float())
 
-    handles = []
-    skip_count = 0
-    for idx, m in enumerate(model.named_modules()):
-        if isinstance(m[1], nn.Conv2d):
-            skip_count += 1
-            if skip_count <= args.skip_masks:
-                continue
-            logger.info('\t{} registering forward hook...'.format(m[0]))
-            h = m[1].register_forward_pre_hook(hook=partial(myhook, name=m[0], strides=strides))
-            handles.append(h)
+    logger.info('Registering forward masking hooks...')
+    handles = _register_forward_hooks(model, partial(myhook, strides=strides))
+
+    # handles = []
+    # skip_count = 0
+    # for idx, m in enumerate(model.named_modules()):
+    #     if isinstance(m[1], nn.Conv2d):
+    #         skip_count += 1
+    #         if skip_count <= args.skip_masks:
+    #             continue
+    #         logger.info('\t{} registering forward masking hook...'.format(m[0]))
+    #         h = m[1].register_forward_pre_hook(hook=partial(myhook, name=m[0], strides=strides))
+    #         handles.append(h)
+    return handles
+
+# add thresholding hooks to model
+def add_forward_thresholds(model, threshold):
+    def myhook(m, input, name=None):
+        input[0].mul_(torch.gt(torch.abs(input[0]), threshold).float())
+    logger.info('Registering forward thresholding hooks...')
+    handles = _register_forward_hooks(model, myhook)
+    return handles
+
+# add sparsity hooks to model
+def add_sparsity_hooks(model, threshold):
+    def myhook(m, input, name=None):
+        mat = torch.gt(torch.abs(input[0]), threshold)
+        nonzero_ratio = mat.nonzero().size(0) / float(mat.numel())
+        logger.info('\t\t{} sparsity: {}'.format(name, 1.0 - nonzero_ratio))
+    logger.info('Registering forward sparsity hooks...')
+    handles = _register_forward_hooks(model, myhook)
     return handles
 
 def add_backward_hooks(model, mask_dict):
@@ -299,8 +341,11 @@ def main():
 
     if args.evaluate:
         # all_masks = get_all_masks(mean_mask_dir)
-        # add_forward_hooks(model, g_mask_batch)
+        # add_forward_masks(model, g_mask_batch)
         # validate(val_loader, model, criterion, mask_batch_ptr=g_mask_batch, all_masks=all_masks)
+        if args.feature_threshold > 1e-9:
+            add_forward_thresholds(model, args.feature_threshold)
+            add_sparsity_hooks(model, args.feature_threshold)
         validate(val_loader, model, criterion)
         return
 
