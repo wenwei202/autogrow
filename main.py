@@ -155,13 +155,21 @@ def add_forward_thresholds(model, threshold):
 
 # add sparsity hooks to model
 def add_sparsity_hooks(model, threshold):
+    nonzero_counter = collections.OrderedDict()
+    elt_counter = collections.OrderedDict()
+    sparsity = collections.OrderedDict()
     def myhook(m, input, name=None):
         mat = torch.gt(torch.abs(input[0]), threshold)
-        nonzero_ratio = mat.nonzero().size(0) / float(mat.numel())
-        logger.info('\t\t{} sparsity: {}'.format(name, 1.0 - nonzero_ratio))
+        nonzero_num = mat.nonzero().size(0)
+        # nonzero_ratio = mat.nonzero().size(0) / float(mat.numel())
+        # logger.info('\t\t{} sparsity: {}'.format(name, 1.0 - nonzero_ratio))
+        nonzero_counter[name] = (nonzero_counter[name] + nonzero_num) if (name in nonzero_counter) else nonzero_num
+        elt_counter[name] = (elt_counter[name] + mat.numel()) if (name in elt_counter) else mat.numel()
+        sparsity[name] = 1.0 - nonzero_counter[name] / float(elt_counter[name])
+
     logger.info('Registering forward sparsity hooks...')
     handles = _register_forward_hooks(model, myhook)
-    return handles
+    return handles, sparsity
 
 def add_backward_hooks(model, mask_dict):
     tmp = torch.zeros(args.batch_size)
@@ -345,8 +353,9 @@ def main():
         # validate(val_loader, model, criterion, mask_batch_ptr=g_mask_batch, all_masks=all_masks)
         if args.feature_threshold > 1e-9:
             add_forward_thresholds(model, args.feature_threshold)
-            add_sparsity_hooks(model, args.feature_threshold)
+            _, sparsity = add_sparsity_hooks(model, args.feature_threshold)
         validate(val_loader, model, criterion)
+        logger.info("Sparsity: {}".format(sparsity))
         return
 
     for epoch in range(args.start_epoch, args.epochs):
