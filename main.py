@@ -89,6 +89,8 @@ parser.add_argument('--skip-masks', default=1, type=int,
                     metavar='N', help='How many first conv layers are skip in maskout(default: 1)')
 parser.add_argument('--workspace', default='myworkspace', type=str,
                     help='the directory of workspace to save results')
+parser.add_argument('--masks-path', default=None, type=str,
+                    help='the directory of masks')
 
 
 parser.add_argument('--pretrained', dest='pretrained', action='store_true',
@@ -258,7 +260,10 @@ def main():
     mean_mask_dir = args.workspace + "/" + args.arch + "/mean_feature_masks"
     ratio_mask_dir = args.workspace + "/" + args.arch + "/ratio_feature_masks"
     if args.maskout:
-        all_masks = get_all_masks(mean_mask_dir)
+        if args.masks_path is None:
+            all_masks = get_all_masks(mean_mask_dir)
+        else:
+            all_masks = get_all_masks(args.masks_path)
         # all_masks = get_all_masks(ratio_mask_dir)
 
     if args.gpu is not None:
