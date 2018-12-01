@@ -183,7 +183,6 @@ def add_backward_hooks(model, mask_dict):
     strides = [t.size()[0] for t in tmp]
 
     def myhook(m, grad_input, grad_output, name=None, strides=None):
-        # print grad_input[0].size(), grad_input[1].size(), grad_input[2].size()
         device_idx = grad_input[0].device.index
         sidx = sum([s for s in strides[0:device_idx]])
         eidx = sum([s for s in strides[0:device_idx + 1]])
@@ -265,6 +264,11 @@ def main():
         else:
             all_masks = get_all_masks(args.masks_path)
         # all_masks = get_all_masks(ratio_mask_dir)
+        add_backward_hooks(model, g_mask_batch)
+
+    if args.evaluate and (args.feature_threshold > 1e-9):
+        add_forward_thresholds(model, args.feature_threshold)
+        _, sparsity = add_sparsity_hooks(model, args.feature_threshold)
 
     if args.gpu is not None:
         model = model.cuda(args.gpu)
@@ -372,12 +376,6 @@ def main():
         return
 
     if args.evaluate:
-        # all_masks = get_all_masks(mean_mask_dir)
-        # add_forward_masks(model, g_mask_batch)
-        # validate(val_loader, model, criterion, mask_batch_ptr=g_mask_batch, all_masks=all_masks)
-        if args.feature_threshold > 1e-9:
-            add_forward_thresholds(model, args.feature_threshold)
-            _, sparsity = add_sparsity_hooks(model, args.feature_threshold)
         validate(val_loader, model, criterion)
         logger.info("Sparsity: {}".format(sparsity))
         return
@@ -390,9 +388,7 @@ def main():
         # train for one epoch
         # add hooks
         if args.maskout:
-            bwd_hs = add_backward_hooks(model, g_mask_batch)
             train(train_loader, model, criterion, optimizer, epoch, mask_batch_ptr=g_mask_batch, all_masks=all_masks)
-            remove_hooks(bwd_hs)
         else:
             train(train_loader, model, criterion, optimizer, epoch)
 
