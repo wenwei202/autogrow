@@ -77,6 +77,8 @@ parser.add_argument('-e', '--evaluate', dest='evaluate', action='store_true',
 # new arguments
 parser.add_argument('--feature-analyze', dest='feature_analyze', action='store_true',
                     help='analyze features')
+parser.add_argument('--norm', default=2, type=int,
+                    metavar='N', help='norm to reserve features')
 parser.add_argument('--plot', dest='plot', action='store_true',
                     help='whether plot and save figures')
 parser.add_argument('--maskout', dest='maskout', action='store_true',
@@ -379,8 +381,8 @@ def main():
             plot_features(feature_dir=mean_dir, fig_dir=fig_mean_dir)
             plot_features(feature_dir=ratio_dir, fig_dir=fig_ratio_dir)
 
-        get_masks_by_norm(from_dir=mean_dir, to_dir=mean_mask_dir)
-        get_masks_by_norm(from_dir=ratio_dir, to_dir=ratio_mask_dir)
+        get_masks_by_norm(from_dir=mean_dir, to_dir=mean_mask_dir, p=args.norm)
+        get_masks_by_norm(from_dir=ratio_dir, to_dir=ratio_mask_dir, p=args.norm)
 
         analyze_masks(mean_mask_dir, fig_mean_mask_dir)
         analyze_masks(ratio_mask_dir, fig_ratio_mask_dir)
