@@ -126,18 +126,24 @@ def _register_forward_hooks(model, hook):
 
 # add masking hooks to model
 def add_forward_masks(model, mask_dict):
-    tmp = torch.zeros(args.batch_size)
-    tmp = torch.chunk(tmp, torch.cuda.device_count())
-    strides = [t.size()[0] for t in tmp]
-
+    gpu_num = 1 if (args.gpu is not None) else torch.cuda.device_count()
     def myhook(m, input, name=None, strides=None):
+        sbsize = input[0].size(0)
+        # depends on split by torch.chunk
         device_idx = input[0].device.index
-        sidx = sum([s for s in strides[0:device_idx]])
-        eidx = sum([s for s in strides[0:device_idx + 1]])
+        if 1 == gpu_num:
+            sidx = 0
+            eidx = sidx + sbsize
+        elif device_idx == gpu_num - 1:  # last split
+            sidx = -sbsize
+            eidx = len(mask_dict[name])
+        else:
+            sidx = sbsize * device_idx
+            eidx = sidx + sbsize
         input[0].mul_(mask_dict[name][sidx:eidx].cuda(input[0].device).float())
 
     logger.info('Registering forward masking hooks...')
-    handles = _register_forward_hooks(model, partial(myhook, strides=strides))
+    handles = _register_forward_hooks(model, myhook)
 
     # handles = []
     # skip_count = 0
@@ -178,14 +184,22 @@ def add_sparsity_hooks(model, threshold):
     return handles, sparsity
 
 def add_backward_hooks(model, mask_dict):
-    tmp = torch.zeros(args.batch_size)
-    tmp = torch.chunk(tmp, torch.cuda.device_count())
-    strides = [t.size()[0] for t in tmp]
+    gpu_num = 1 if (args.gpu is not None) else torch.cuda.device_count()
 
-    def myhook(m, grad_input, grad_output, name=None, strides=None):
+    def myhook(m, grad_input, grad_output, name=None):
+        sbsize = grad_input[0].size(0)
+        # depends on split by torch.chunk
         device_idx = grad_input[0].device.index
-        sidx = sum([s for s in strides[0:device_idx]])
-        eidx = sum([s for s in strides[0:device_idx + 1]])
+        if 1 == gpu_num:
+           sidx = 0
+           eidx = sidx + sbsize
+        elif device_idx == gpu_num - 1: # last split
+            sidx = -sbsize
+            eidx = len(mask_dict[name])
+        else:
+            sidx = sbsize * device_idx
+            eidx = sidx + sbsize
+
         mask_subbatch = mask_dict[name][sidx:eidx].cuda(grad_input[0].device).float()
         masked_grad_input = grad_input[0] + (1.0 - mask_subbatch) * args.feature_reg
         return (masked_grad_input, grad_input[1], grad_input[2])
@@ -198,7 +212,7 @@ def add_backward_hooks(model, mask_dict):
             if skip_count <= args.skip_masks:
                 continue
             logger.info('\t{} registering backward hook...'.format(m[0]))
-            h = m[1].register_backward_hook(hook=partial(myhook, name=m[0], strides=strides))
+            h = m[1].register_backward_hook(hook=partial(myhook, name=m[0]))
             handles.append(h)
     return handles
 
@@ -267,6 +281,8 @@ def main():
         add_backward_hooks(model, g_mask_batch)
 
     if args.evaluate and (args.feature_threshold > 1e-9):
+        # all_masks = get_all_masks(mean_mask_dir)
+        # add_forward_masks(model, g_mask_batch)
         add_forward_thresholds(model, args.feature_threshold)
         _, sparsity = add_sparsity_hooks(model, args.feature_threshold)
 
@@ -376,6 +392,7 @@ def main():
         return
 
     if args.evaluate:
+        # validate(val_loader, model, criterion, mask_batch_ptr=g_mask_batch, all_masks=all_masks)
         validate(val_loader, model, criterion)
         logger.info("Sparsity: {}".format(sparsity))
         return
