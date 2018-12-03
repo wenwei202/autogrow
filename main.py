@@ -7,6 +7,7 @@ import pickle
 import collections
 import shutil
 import numpy as np
+import math
 import matplotlib
 matplotlib.use("pdf")
 import matplotlib.pyplot as plt
@@ -592,6 +593,8 @@ def analyze_masks(mask_dir, fig_dir, downsample_rate=1):
             num_ones += one_cnt
             # print("\tclass {}: {}".format(idx1, 1.0 - one_cnt / mask1.numel()))
             one_cnts.append(one_cnt)
+            if 0==one_cnt:
+                raise ValueError("All are masked out!")
 
         for idx1, mask1 in enumerate(masks):
             for idx2, mask2 in enumerate(masks):
@@ -857,7 +860,7 @@ def get_masks_by_norm(from_dir='mean_features', to_dir="feature_masks", ratio=0.
                 else:
                     left_idx = mid_idx + 1
             threhold = sorted_value[left_idx] ** (1.0/p)
-            masks[key] = value.ge(threhold)
+            masks[key] = value.ge(threhold - 1.0e-6)
         save_obj(masks, to_dir+"/"+f)
 
 # analyze statistics of features for a target class
