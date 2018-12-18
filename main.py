@@ -25,7 +25,7 @@ from models import *
 
 parser = argparse.ArgumentParser(description='PyTorch CIFAR10 Training')
 parser.add_argument('--lr', default=0.1, type=float, help='learning rate')
-parser.add_argument('--optimizer', default='sgd', type=str, help='sgd variants (sgd, adam, amsgrad)')
+parser.add_argument('--optimizer', default='sgd', type=str, help='sgd variants (sgd, adam, amsgrad, adagrad)')
 
 parser.add_argument('--epochs', default=300, type=int, help='the number of epochs')
 parser.add_argument('--batch-size', default=128, type=int, help='batch size')
@@ -109,6 +109,8 @@ elif 'adam' == args.optimizer:
     optimizer = optim.Adam(net.parameters(), lr=args.lr, weight_decay=5e-4)
 elif 'amsgrad' == args.optimizer:
     optimizer = optim.Adam(net.parameters(), lr=args.lr, weight_decay=5e-4, amsgrad=True)
+elif 'adagrad' == args.optimizer:
+    optimizer = optim.Adagrad(net.parameters(), lr=args.lr, weight_decay=5e-4)
 else:
     raise ValueError('Unknown --optimizer')
 
