@@ -191,7 +191,8 @@ ax2.set_ylabel('Accuracy (%)', color=clr2)
 ax2.tick_params(axis='y', colors=clr2)
 
 for epoch in range(start_epoch, start_epoch+args.epochs):
-    adjust_learning_rate(optimizer, epoch, args)
+    if 'sgd' == args.optimizer:
+        adjust_learning_rate(optimizer, epoch, args)
     curves[epoch, 0] = epoch
     curves[epoch, 1], curves[epoch, 2] = train(epoch)
     curves[epoch, 3], curves[epoch, 4] = test(epoch)
