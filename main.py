@@ -6,6 +6,7 @@ matplotlib.use("pdf")
 import matplotlib.pyplot as plt
 import logging
 from datetime import datetime
+from copy import deepcopy
 
 import torch
 import torch.nn as nn
@@ -19,18 +20,97 @@ import torchvision.transforms as transforms
 import os
 import argparse
 import numpy as np
+import models
+import utils
 
-from models import *
+# from models import *
 
 
 parser = argparse.ArgumentParser(description='PyTorch CIFAR10 Training')
 parser.add_argument('--lr', default=0.1, type=float, help='learning rate')
 parser.add_argument('--optimizer', default='sgd', type=str, help='sgd variants (sgd, adam, amsgrad, adagrad, adadelta, rmsprop)')
 
+parser.add_argument('--grow-interval', default=3, type=int, help='an interval (in epochs) to grow new structures')
+parser.add_argument('--grow-threshold', default=0.2, type=float, help='the accuracy threshold to grow or stop')
+parser.add_argument('--net', default='ResNet18', type=str, help='net')
 parser.add_argument('--epochs', default=300, type=int, help='the number of epochs')
 parser.add_argument('--batch-size', default=128, type=int, help='batch size')
 parser.add_argument('--resume', '-r', action='store_true', help='resume from checkpoint')
 args = parser.parse_args()
+
+def get_module(name):
+    net = getattr(models, name)()
+    net = net.to('cuda')
+    net = torch.nn.DataParallel(net)
+    cudnn.benchmark = True
+    return net
+
+def get_optimizer(net):
+    if 'sgd' == args.optimizer:
+        optimizer = optim.SGD(net.parameters(), lr=args.lr, momentum=0.9, weight_decay=5e-4)
+    elif 'adam' == args.optimizer:
+        optimizer = optim.Adam(net.parameters(), lr=args.lr, weight_decay=5e-4)
+    elif 'amsgrad' == args.optimizer:
+        optimizer = optim.Adam(net.parameters(), lr=args.lr, weight_decay=5e-4, amsgrad=True)
+    elif 'adagrad' == args.optimizer:
+        optimizer = optim.Adagrad(net.parameters(), lr=args.lr, weight_decay=5e-4)
+    elif 'adadelta' == args.optimizer:
+        optimizer = optim.Adadelta(net.parameters(), weight_decay=5e-4)
+    elif 'rmsprop' == args.optimizer:
+        optimizer = optim.RMSprop(net.parameters(), lr=args.lr, alpha=0.99, weight_decay=5e-4)
+    else:
+        logger.fatal('Unknown --optimizer')
+        raise ValueError('Unknown --optimizer')
+    return optimizer
+
+def params_id_to_name(net):
+    themap = {}
+    for k, v in net.named_parameters():
+        themap[id(v)] = k
+    return themap
+
+def params_name_to_id(net):
+    themap = {}
+    for k, v in net.named_parameters():
+        themap[k] = id(v)
+    return themap
+
+def save_all(epoch, model, optimizer, path):
+    torch.save({
+        'epoch': epoch,
+        'model_state_dict': model.state_dict(),
+        'optimizer_state_dict': optimizer.state_dict(),
+        'name_id_map': params_name_to_id(model),
+    }, path)
+
+def load_all(model, optimizer, path):
+    checkpoint = torch.load(path)
+    model.load_state_dict(checkpoint['model_state_dict'], strict=False)
+    # insert missing states as empty dict
+    old_name_id_map = checkpoint['name_id_map']
+    new_id_name_map = params_id_to_name(model)
+    new_checkpoint = deepcopy(optimizer.state_dict())
+    old_checkpoint = checkpoint['optimizer_state_dict']
+    if len(old_checkpoint['param_groups']) != 1 or len(new_checkpoint['param_groups']) != 1:
+        logger.fatal('The number of param_groups is not 1.')
+        exit()
+    for new_id in new_checkpoint['param_groups'][0]['params']:
+        name = new_id_name_map[new_id]
+        if name in old_name_id_map:
+            logger.info('loading param {} state...'.format(name))
+            old_id = old_name_id_map[name]
+            new_checkpoint['state'][new_id] = old_checkpoint['state'][old_id]
+        else:
+            if new_id not in new_checkpoint['state']:
+                logger.info('initializing param {} state as an empty dict...'.format(name))
+                new_checkpoint['state'][new_id] = {}
+            else:
+                logger.info('skipping param {} state (initial state exists)...'.format(name))
+    optimizer.load_state_dict(new_checkpoint)
+    # optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+    epoch = checkpoint['epoch']
+
+    return epoch
 
 def adjust_learning_rate(optimizer, epoch, args):
     """Sets the learning rate to the initial LR decayed by 10 every 100 epochs"""
@@ -77,8 +157,9 @@ classes = ('plane', 'car', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship'
 
 # Model
 logger.info('==> Building model..')
+net = get_module(args.net)
 # net = VGG('VGG19')
-net = ResNet18()
+# net = ResNet18()
 # net = PreActResNet18()
 # net = GoogLeNet()
 # net = DenseNet121()
@@ -88,10 +169,6 @@ net = ResNet18()
 # net = DPN92()
 # net = ShuffleNetG2()
 # net = SENet18()
-net = net.to(device)
-if device == 'cuda':
-    net = torch.nn.DataParallel(net)
-    cudnn.benchmark = True
 
 if args.resume:
     # Load checkpoint.
@@ -103,23 +180,10 @@ if args.resume:
     start_epoch = checkpoint['epoch']
 
 criterion = nn.CrossEntropyLoss()
-if 'sgd' == args.optimizer:
-    optimizer = optim.SGD(net.parameters(), lr=args.lr, momentum=0.9, weight_decay=5e-4)
-elif 'adam' == args.optimizer:
-    optimizer = optim.Adam(net.parameters(), lr=args.lr, weight_decay=5e-4)
-elif 'amsgrad' == args.optimizer:
-    optimizer = optim.Adam(net.parameters(), lr=args.lr, weight_decay=5e-4, amsgrad=True)
-elif 'adagrad' == args.optimizer:
-    optimizer = optim.Adagrad(net.parameters(), lr=args.lr, weight_decay=5e-4)
-elif 'adadelta' == args.optimizer:
-    optimizer = optim.Adadelta(net.parameters(), weight_decay=5e-4)
-elif 'rmsprop' == args.optimizer:
-    optimizer = optim.RMSprop(net.parameters(), lr=args.lr, alpha=0.99, weight_decay=5e-4)
-else:
-    raise ValueError('Unknown --optimizer')
+optimizer = get_optimizer(net)
 
 # Training
-def train(epoch):
+def train(epoch, net):
     logger.info('\nEpoch: %d (train)' % epoch)
     net.train()
     train_loss = 0
@@ -142,7 +206,7 @@ def train(epoch):
                 % (batch_idx+1, len(trainloader), train_loss/(batch_idx+1), 100.*correct/total, correct, total))
     return train_loss / len(trainloader), 100.*correct/total
 
-def test(epoch):
+def test(epoch, net, save=False):
     logger.info('Epoch: %d (test)' % epoch)
     global best_acc
     net.eval()
@@ -165,15 +229,15 @@ def test(epoch):
 
     # Save checkpoint.
     acc = 100.*correct/total
-    if acc > best_acc:
-        logger.info('Saving best @ {epoch %d}..' % epoch)
+    if acc > best_acc and save:
+        logger.info('Saving best %.3f @ %d ...' %(acc, epoch))
         state = {
             'net': net.state_dict(),
             'acc': acc,
             'epoch': epoch,
         }
         torch.save(state, os.path.join(save_path, 'best_ckpt.t7'))
-        best_acc = acc
+    best_acc = acc if acc > best_acc else best_acc
 
     return test_loss / len(testloader), acc
 
@@ -189,14 +253,33 @@ ax1.set_ylabel('Loss', color=clr1)
 ax1.tick_params(axis='y', colors=clr1)
 ax2.set_ylabel('Accuracy (%)', color=clr2)
 ax2.tick_params(axis='y', colors=clr2)
-
+emv = utils.ExponentialMovingAverage(decay=0.95)
+save_ckpt = os.path.join(save_path, '{}_ckpt.t7'.format(args.net))
+stop_growing = False
 for epoch in range(start_epoch, start_epoch+args.epochs):
+    # grow or stop
+    if epoch and (epoch % args.grow_interval == 0) \
+            and emv.delta(-1-args.grow_interval, -1) < args.grow_threshold \
+            and not stop_growing:
+        logger.info('******> grow @ epoch %d' % (epoch))
+        # save current model
+        save_all(epoch-1, net, optimizer, save_ckpt)
+        # create a new net and optimizer
+        net = get_module('ResNet20')
+        optimizer = get_optimizer(net)
+        loaded_epoch = load_all(net, optimizer, save_ckpt)
+        # initialization
+        # TODO
+        logger.info('testing loaded model ...')
+        test(loaded_epoch, net)
+        stop_growing = True # grow once for test only
+    # training and testing
     if 'sgd' == args.optimizer:
         adjust_learning_rate(optimizer, epoch, args)
     curves[epoch, 0] = epoch
-    curves[epoch, 1], curves[epoch, 2] = train(epoch)
-    curves[epoch, 3], curves[epoch, 4] = test(epoch)
-
+    curves[epoch, 1], curves[epoch, 2] = train(epoch, net)
+    curves[epoch, 3], curves[epoch, 4] = test(epoch, net, save=True)
+    emv.push(curves[epoch, 4])
     # plotting
     ax1.semilogy(curves[:epoch+1, 0], curves[:epoch+1, 1], '--', color=clr1, mfc=clr1, markersize=2)
     ax1.semilogy(curves[:epoch+1, 0], curves[:epoch+1, 3], '-', color=clr1, mfc=clr1, markersize=2)
@@ -204,8 +287,6 @@ for epoch in range(start_epoch, start_epoch+args.epochs):
     ax2.plot(curves[:epoch+1, 0], curves[:epoch+1, 4], '-', color=clr2, mfc=clr2, markersize=2)
     ax1.legend(('Train loss', 'Val loss'), loc='lower right')
     ax2.legend(('Train accuracy', 'Val accuracy'), loc='upper left')
-
-    #        ax1.grid(b=True, which='both')
     plt.savefig(os.path.join(save_path, 'curves.pdf'))
 
 logger.info('Done!')
