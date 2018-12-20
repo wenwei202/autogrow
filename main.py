@@ -28,18 +28,25 @@ import utils
 
 parser = argparse.ArgumentParser(description='PyTorch CIFAR10 Training')
 parser.add_argument('--lr', default=0.1, type=float, help='learning rate')
-parser.add_argument('--optimizer', default='sgd', type=str, help='sgd variants (sgd, adam, amsgrad, adagrad, adadelta, rmsprop)')
+parser.add_argument('--optimizer', '--opt', default='sgd', type=str, help='sgd variants (sgd, adam, amsgrad, adagrad, adadelta, rmsprop)')
 
-parser.add_argument('--grow-interval', default=3, type=int, help='an interval (in epochs) to grow new structures')
-parser.add_argument('--grow-threshold', default=0.2, type=float, help='the accuracy threshold to grow or stop')
-parser.add_argument('--net', default='ResNet18', type=str, help='net')
+parser.add_argument('--grow-interval', '--gi', default=3, type=int, help='an interval (in epochs) to grow new structures')
+parser.add_argument('--grow-threshold', '--gt', default=0.2, type=float, help='the accuracy threshold to grow or stop')
+parser.add_argument('--net', default='1-1-1-1', type=str, help='starting net')
 parser.add_argument('--epochs', default=300, type=int, help='the number of epochs')
-parser.add_argument('--batch-size', default=128, type=int, help='batch size')
+parser.add_argument('--batch-size', '--bz', default=128, type=int, help='batch size')
 parser.add_argument('--resume', '-r', action='store_true', help='resume from checkpoint')
 args = parser.parse_args()
 
-def get_module(name):
-    net = getattr(models, name)()
+def list_to_str(l):
+    list(map(str, l))
+    s = ''
+    for v in l:
+        s += str(v) + '-'
+    return s[:-1]
+
+def get_module(name, *args, **keywords):
+    net = getattr(models, name)(*args, **keywords)
     net = net.to('cuda')
     net = torch.nn.DataParallel(net)
     cudnn.benchmark = True
@@ -157,7 +164,10 @@ classes = ('plane', 'car', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship'
 
 # Model
 logger.info('==> Building model..')
-net = get_module(args.net)
+current_arch = list(map(int, args.net.split('-')))
+max_arch = [100, 100, 100, 100]
+growing_group = 0
+net = get_module('ResNetBasic', current_arch)
 # net = VGG('VGG19')
 # net = ResNet18()
 # net = PreActResNet18()
@@ -169,15 +179,6 @@ net = get_module(args.net)
 # net = DPN92()
 # net = ShuffleNetG2()
 # net = SENet18()
-
-if args.resume:
-    # Load checkpoint.
-    logger.info('==> Resuming from checkpoint..')
-    assert os.path.isdir('checkpoint'), 'Error: no checkpoint directory found!'
-    checkpoint = torch.load('./checkpoint/ckpt.t7')
-    net.load_state_dict(checkpoint['net'])
-    best_acc = checkpoint['acc']
-    start_epoch = checkpoint['epoch']
 
 criterion = nn.CrossEntropyLoss()
 optimizer = get_optimizer(net)
@@ -229,8 +230,9 @@ def test(epoch, net, save=False):
 
     # Save checkpoint.
     acc = 100.*correct/total
+    global current_arch
     if acc > best_acc and save:
-        logger.info('Saving best %.3f @ %d ...' %(acc, epoch))
+        logger.info('Saving best %.3f @ %d  ( resnet-%s )...' %(acc, epoch, list_to_str(current_arch)))
         state = {
             'net': net.state_dict(),
             'acc': acc,
@@ -254,25 +256,34 @@ ax1.tick_params(axis='y', colors=clr1)
 ax2.set_ylabel('Accuracy (%)', color=clr2)
 ax2.tick_params(axis='y', colors=clr2)
 emv = utils.ExponentialMovingAverage(decay=0.95)
-save_ckpt = os.path.join(save_path, '{}_ckpt.t7'.format(args.net))
 stop_growing = False
+growed = False  # if growed in the recent interval
 for epoch in range(start_epoch, start_epoch+args.epochs):
     # grow or stop
-    if epoch and (epoch % args.grow_interval == 0) \
-            and emv.delta(-1-args.grow_interval, -1) < args.grow_threshold \
-            and not stop_growing:
-        logger.info('******> grow @ epoch %d' % (epoch))
-        # save current model
-        save_all(epoch-1, net, optimizer, save_ckpt)
-        # create a new net and optimizer
-        net = get_module('ResNet20')
-        optimizer = get_optimizer(net)
-        loaded_epoch = load_all(net, optimizer, save_ckpt)
-        # initialization
-        # TODO
-        logger.info('testing loaded model ...')
-        test(loaded_epoch, net)
-        stop_growing = True # grow once for test only
+    if epoch and (epoch % args.grow_interval == 0): # check after every interval
+        delta_accu = emv.delta(-1 - args.grow_interval, -1)
+        logger.info('******> improved %.3f (ExponentialMovingAverage) in the last %d epochs' % (delta_accu, args.grow_interval))
+        if growed and delta_accu < args.grow_threshold: # just growed but no improvement
+            logger.info('******> stop growing permanently')
+            stop_growing = True # stop growing permanently
+        if not stop_growing and delta_accu < args.grow_threshold:
+            # save current model
+            save_ckpt = os.path.join(save_path, 'resnet-{}_ckpt.t7'.format(list_to_str(current_arch)))
+            save_all(epoch-1, net, optimizer, save_ckpt)
+            # create a new net and optimizer
+            current_arch[growing_group] += 1
+            growing_group = (growing_group+1)%len(current_arch)
+            logger.info('******> growing to resnet-%s @ epoch %d' % (list_to_str(current_arch), epoch))
+            net = get_module("ResNetBasic", num_blocks=current_arch)
+            optimizer = get_optimizer(net)
+            loaded_epoch = load_all(net, optimizer, save_ckpt)
+            # new params initialization
+            # TODO
+            logger.info('testing new model ...')
+            test(loaded_epoch, net)
+            growed = True
+        else:
+            growed = False
     # training and testing
     if 'sgd' == args.optimizer:
         adjust_learning_rate(optimizer, epoch, args)
