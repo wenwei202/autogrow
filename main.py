@@ -7,6 +7,7 @@ import matplotlib.pyplot as plt
 import logging
 from datetime import datetime
 from copy import deepcopy
+import re
 
 import torch
 import torch.nn as nn
@@ -92,10 +93,16 @@ def save_all(epoch, model, optimizer, path):
 
 def load_all(model, optimizer, path):
     checkpoint = torch.load(path)
-    model.load_state_dict(checkpoint['model_state_dict'], strict=False)
-    # insert missing states as empty dict
     old_name_id_map = checkpoint['name_id_map']
     new_id_name_map = params_id_to_name(model)
+    # load existing params, and initializing missing ones
+    model.load_state_dict(checkpoint['model_state_dict'], strict=False)
+    for n, p in model.named_parameters():
+        if n not in old_name_id_map and re.match('.*layer.*bn2.((weight)|(bias))$', n):
+            logger.info('reinitializing param {} ...'.format(n))
+            p.data.zero_()
+
+    # load existing states, and insert missing states as empty dict
     new_checkpoint = deepcopy(optimizer.state_dict())
     old_checkpoint = checkpoint['optimizer_state_dict']
     if len(old_checkpoint['param_groups']) != 1 or len(new_checkpoint['param_groups']) != 1:
