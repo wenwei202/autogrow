@@ -173,7 +173,15 @@ classes = ('plane', 'car', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship'
 logger.info('==> Building model..')
 current_arch = list(map(int, args.net.split('-')))
 max_arch = [100, 100, 100, 100]
-growing_group = 0
+if len(current_arch) != len(max_arch):
+    logger.fatal('max_arch has different size.')
+    exit()
+growing_group = -1
+for cnt, v in enumerate(current_arch):
+    if v < max_arch[cnt]:
+        growing_group = cnt
+        break
+
 net = get_module('ResNetBasic', current_arch)
 # net = VGG('VGG19')
 # net = ResNet18()
@@ -263,48 +271,74 @@ ax1.tick_params(axis='y', colors=clr1)
 ax2.set_ylabel('Accuracy (%)', color=clr2)
 ax2.tick_params(axis='y', colors=clr2)
 emv = utils.ExponentialMovingAverage(decay=0.95)
-stop_growing = False
 growed = False  # if growed in the recent interval
-for epoch in range(start_epoch, start_epoch+args.epochs):
+
+def next_group(g, maxlim, arch):
+    if g < 0 or g >= len(maxlim):
+        logger.fatal('Wrong group index %d' % g)
+        exit()
+    for i in range(len(maxlim)):
+        idx = (g+i+1)%len(maxlim)
+        if maxlim[idx] > arch[idx]:
+            return idx
+    return -1
+
+def can_grow(maxlim, arch):
+    for maxv, a in zip(maxlim, arch):
+        if maxv > a:
+            return True
+    return False
+
+intervals = args.epochs // args.grow_interval
+for interval in range(0, intervals):
     # grow or stop
-    if epoch and (epoch % args.grow_interval == 0): # check after every interval
+    grow_check = interval > 0
+    if grow_check:  # check after every interval
         delta_accu = emv.delta(-1 - args.grow_interval, -1)
-        logger.info('******> improved %.3f (ExponentialMovingAverage) in the last %d epochs' % (delta_accu, args.grow_interval))
-        if growed and delta_accu < args.grow_threshold: # just growed but no improvement
-            logger.info('******> stop growing permanently')
-            stop_growing = True # stop growing permanently
-        if not stop_growing and delta_accu < args.grow_threshold:
+        logger.info(
+            '******> improved %.3f (ExponentialMovingAverage) in the last %d epochs' % (delta_accu, args.grow_interval))
+        if can_grow(max_arch, current_arch) and delta_accu < args.grow_threshold:
             # save current model
             save_ckpt = os.path.join(save_path, 'resnet-{}_ckpt.t7'.format(list_to_str(current_arch)))
-            save_all(epoch-1, net, optimizer, save_ckpt)
+            save_all(interval*args.grow_interval - 1, net, optimizer, save_ckpt)
             # create a new net and optimizer
             current_arch[growing_group] += 1
-            growing_group = (growing_group+1)%len(current_arch)
-            logger.info('******> growing to resnet-%s @ epoch %d' % (list_to_str(current_arch), epoch))
+            logger.info('******> growing to resnet-%s before epoch %d' % (list_to_str(current_arch), interval*args.grow_interval))
             net = get_module("ResNetBasic", num_blocks=current_arch)
             optimizer = get_optimizer(net)
             loaded_epoch = load_all(net, optimizer, save_ckpt)
-            # new params initialization
-            # TODO
             logger.info('testing new model ...')
             test(loaded_epoch, net)
             growed = True
         else:
             growed = False
+
     # training and testing
-    if 'sgd' == args.optimizer:
-        adjust_learning_rate(optimizer, epoch, args)
-    curves[epoch, 0] = epoch
-    curves[epoch, 1], curves[epoch, 2] = train(epoch, net)
-    curves[epoch, 3], curves[epoch, 4] = test(epoch, net, save=True)
-    emv.push(curves[epoch, 4])
-    # plotting
-    ax1.semilogy(curves[:epoch+1, 0], curves[:epoch+1, 1], '--', color=clr1, mfc=clr1, markersize=2)
-    ax1.semilogy(curves[:epoch+1, 0], curves[:epoch+1, 3], '-', color=clr1, mfc=clr1, markersize=2)
-    ax2.plot(curves[:epoch+1, 0], curves[:epoch+1, 2], '--', color=clr2, mfc=clr2, markersize=2)
-    ax2.plot(curves[:epoch+1, 0], curves[:epoch+1, 4], '-', color=clr2, mfc=clr2, markersize=2)
-    ax1.legend(('Train loss', 'Val loss'), loc='lower right')
-    ax2.legend(('Train accuracy', 'Val accuracy'), loc='upper left')
-    plt.savefig(os.path.join(save_path, 'curves.pdf'))
+    for epoch in range(interval*args.grow_interval, (interval+1)*args.grow_interval):
+        if 'sgd' == args.optimizer:
+            adjust_learning_rate(optimizer, epoch, args)
+        curves[epoch, 0] = epoch
+        curves[epoch, 1], curves[epoch, 2] = train(epoch, net)
+        curves[epoch, 3], curves[epoch, 4] = test(epoch, net, save=True)
+        emv.push(curves[epoch, 4])
+        # plotting
+        ax1.semilogy(curves[:epoch+1, 0], curves[:epoch+1, 1], '--', color=clr1, mfc=clr1, markersize=2)
+        ax1.semilogy(curves[:epoch+1, 0], curves[:epoch+1, 3], '-', color=clr1, mfc=clr1, markersize=2)
+        ax2.plot(curves[:epoch+1, 0], curves[:epoch+1, 2], '--', color=clr2, mfc=clr2, markersize=2)
+        ax2.plot(curves[:epoch+1, 0], curves[:epoch+1, 4], '-', color=clr2, mfc=clr2, markersize=2)
+        ax1.legend(('Train loss', 'Val loss'), loc='lower right')
+        ax2.legend(('Train accuracy', 'Val accuracy'), loc='upper left')
+        plt.savefig(os.path.join(save_path, 'curves.pdf'))
+
+    if grow_check:  # check after every interval
+        delta_accu = emv.delta(-1 - args.grow_interval, -1)
+        if growed and delta_accu < args.grow_threshold: # just growed but no improvement
+            max_arch[growing_group] = current_arch[growing_group]
+            logger.info('******> stop growing group %d permanently. Limited as %s .' % (growing_group, list_to_str(max_arch)))
+        if growed:
+            if can_grow(max_arch, current_arch):
+                growing_group = next_group(growing_group, max_arch, current_arch)
+            else:
+                logger.info('******> stop growing all groups')
 
 logger.info('Done!')
