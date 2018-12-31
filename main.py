@@ -259,17 +259,6 @@ def test(epoch, net, save=False):
     return test_loss / len(testloader), acc
 
 # main func
-# epoch, train loss, train accu, test loss, test accu
-curves = np.zeros((args.epochs, 5))
-clr1 = (0.6, 0., 0.)
-clr2 = (0.42, 0.56, 0.14)
-fig, ax1 = plt.subplots()
-ax2 = ax1.twinx()
-ax1.set_xlabel('epoch')
-ax1.set_ylabel('Loss', color=clr1)
-ax1.tick_params(axis='y', colors=clr1)
-ax2.set_ylabel('Accuracy (%)', color=clr2)
-ax2.tick_params(axis='y', colors=clr2)
 emv = utils.ExponentialMovingAverage(decay=0.95)
 growed = False  # if growed in the recent interval
 
@@ -289,7 +278,9 @@ def can_grow(maxlim, arch):
             return True
     return False
 
+growing_epochs = []
 intervals = (args.epochs - 1) // args.grow_interval + 1
+curves = np.zeros((intervals*args.grow_interval, 5)) # epoch, train loss, train accu, test loss, test accu
 for interval in range(0, intervals):
     # grow or stop
     grow_check = interval > 0
@@ -310,6 +301,7 @@ for interval in range(0, intervals):
             logger.info('testing new model ...')
             test(loaded_epoch, net)
             growed = True
+            growing_epochs.append(interval*args.grow_interval)
         else:
             growed = False
 
@@ -321,14 +313,6 @@ for interval in range(0, intervals):
         curves[epoch, 1], curves[epoch, 2] = train(epoch, net)
         curves[epoch, 3], curves[epoch, 4] = test(epoch, net, save=True)
         emv.push(curves[epoch, 4])
-        # plotting
-        ax1.semilogy(curves[:epoch+1, 0], curves[:epoch+1, 1], '--', color=clr1, mfc=clr1, markersize=2)
-        ax1.semilogy(curves[:epoch+1, 0], curves[:epoch+1, 3], '-', color=clr1, mfc=clr1, markersize=2)
-        ax2.plot(curves[:epoch+1, 0], curves[:epoch+1, 2], '--', color=clr2, mfc=clr2, markersize=2)
-        ax2.plot(curves[:epoch+1, 0], curves[:epoch+1, 4], '-', color=clr2, mfc=clr2, markersize=2)
-        ax1.legend(('Train loss', 'Val loss'), loc='lower right')
-        ax2.legend(('Train accuracy', 'Val accuracy'), loc='upper left')
-        plt.savefig(os.path.join(save_path, 'curves.pdf'))
 
     if grow_check:  # check after every interval
         delta_accu = emv.delta(-1 - args.grow_interval, -1)
@@ -340,5 +324,41 @@ for interval in range(0, intervals):
                 growing_group = next_group(growing_group, max_arch, current_arch)
             else:
                 logger.info('******> stop growing all groups')
+
+# plotting
+plot_segs = [0] + growing_epochs
+if growing_epochs[-1] != curves.shape[0]-1:
+    plot_segs = plot_segs + [curves.shape[0]-1]
+logger.info('growing epochs {}'.format(list_to_str(growing_epochs)))
+logger.info('curves: \n {}'.format(np.array_str(curves)))
+clr1 = (0.5, 0., 0.)
+clr2 = (0.0, 0.5, 0.)
+fig, ax1 = plt.subplots()
+ax2 = ax1.twinx()
+ax1.set_xlabel('epoch')
+ax1.set_ylabel('Loss', color=clr1)
+ax1.tick_params(axis='y', colors=clr1)
+ax2.set_xlabel('epoch')
+ax2.set_ylabel('Accuracy (%)', color=clr2)
+ax2.tick_params(axis='y', colors=clr2)
+# ax2.set_ylim(80, 100) # no plot if enabled
+for idx in range(len(plot_segs)-1):
+    start = 0 if (plot_segs[idx] == 0) else (plot_segs[idx] - 1)
+    end = plot_segs[idx+1] + 1 if (plot_segs[idx+1] == curves.shape[0] - 1) else plot_segs[idx+1]
+    markersize = 12
+    coef = 2. if idx % 2 else 1.
+    if idx == len(plot_segs)-2:
+        ax1.semilogy(curves[start:end, 0], curves[start:end, 1], '--', color=[c*coef for c in clr1], markersize=markersize)
+        ax1.semilogy(curves[start:end, 0], curves[start:end, 3], '-', color=[c*coef for c in clr1], markersize=markersize)
+        ax2.plot(curves[start:end, 0], curves[start:end, 2], '--', color=[c*coef for c in clr2], markersize=markersize)
+        ax2.plot(curves[start:end, 0], curves[start:end, 4], '-', color=[c*coef for c in clr2], markersize=markersize)
+    else:
+        ax1.semilogy(curves[start:end, 0], curves[start:end, 1], '--', color=[c*coef for c in clr1], markersize=markersize, label='_nolegend_')
+        ax1.semilogy(curves[start:end, 0], curves[start:end, 3], '-', color=[c*coef for c in clr1], markersize=markersize, label='_nolegend_')
+        ax2.plot(curves[start:end, 0], curves[start:end, 2], '--', color=[c*coef for c in clr2], markersize=markersize, label='_nolegend_')
+        ax2.plot(curves[start:end, 0], curves[start:end, 4], '-', color=[c*coef for c in clr2], markersize=markersize, label='_nolegend_')
+ax1.legend(('Train loss', 'Val loss'), loc='lower right')
+ax2.legend(('Train accuracy', 'Val accuracy'), loc='upper left')
+plt.savefig(os.path.join(save_path, 'curves.pdf'))
 
 logger.info('Done!')
