@@ -289,7 +289,7 @@ def can_grow(maxlim, arch):
             return True
     return False
 
-intervals = args.epochs // args.grow_interval
+intervals = (args.epochs - 1) // args.grow_interval + 1
 for interval in range(0, intervals):
     # grow or stop
     grow_check = interval > 0
