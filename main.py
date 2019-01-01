@@ -327,7 +327,7 @@ for interval in range(0, intervals):
 
 # plotting
 plot_segs = [0] + growing_epochs
-if growing_epochs[-1] != curves.shape[0]-1:
+if len(growing_epochs) == 0 or growing_epochs[-1] != curves.shape[0]-1:
     plot_segs = plot_segs + [curves.shape[0]-1]
 logger.info('growing epochs {}'.format(list_to_str(growing_epochs)))
 logger.info('curves: \n {}'.format(np.array_str(curves)))
@@ -343,7 +343,7 @@ ax2.set_ylabel('Accuracy (%)', color=clr2)
 ax2.tick_params(axis='y', colors=clr2)
 # ax2.set_ylim(80, 100) # no plot if enabled
 for idx in range(len(plot_segs)-1):
-    start = 0 if (plot_segs[idx] == 0) else (plot_segs[idx] - 1)
+    start = plot_segs[idx]
     end = plot_segs[idx+1] + 1 if (plot_segs[idx+1] == curves.shape[0] - 1) else plot_segs[idx+1]
     markersize = 12
     coef = 2. if idx % 2 else 1.
