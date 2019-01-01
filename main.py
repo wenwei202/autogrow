@@ -324,6 +324,10 @@ for interval in range(0, intervals):
                 growing_group = next_group(growing_group, max_arch, current_arch)
             else:
                 logger.info('******> stop growing all groups')
+                last_epoch = (interval + 1) * args.grow_interval - 1
+                logger.info('******> reach limitation. Finished in advance @ epoch %d' % last_epoch)
+                curves = curves[:last_epoch+1, :]
+                break
 
 # plotting
 plot_segs = [0] + growing_epochs
