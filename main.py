@@ -23,6 +23,7 @@ import argparse
 import numpy as np
 import models
 import utils
+import time
 
 # from models import *
 
@@ -30,11 +31,13 @@ import utils
 parser = argparse.ArgumentParser(description='PyTorch CIFAR10 Training')
 parser.add_argument('--lr', default=0.1, type=float, help='learning rate')
 parser.add_argument('--optimizer', '--opt', default='sgd', type=str, help='sgd variants (sgd, adam, amsgrad, adagrad, adadelta, rmsprop)')
+parser.add_argument('--initializer', '--init', default='uniform', type=str, help='initializers of new structures (zero, uniform, gaussian)')
+parser.add_argument('--init-meta', default=1.0, type=float, help='a meta parameter for initializer')
 
 parser.add_argument('--grow-interval', '--gi', default=30, type=int, help='an interval (in epochs) to grow new structures')
 parser.add_argument('--grow-threshold', '--gt', default=0.1, type=float, help='the accuracy threshold to grow or stop')
 parser.add_argument('--net', default='1-1-1-1', type=str, help='starting net')
-parser.add_argument('--epochs', default=1000, type=int, help='the number of epochs')
+parser.add_argument('--epochs', default=4000, type=int, help='the number of epochs')
 parser.add_argument('--batch-size', '--bz', default=128, type=int, help='batch size')
 parser.add_argument('--resume', '-r', action='store_true', help='resume from checkpoint')
 args = parser.parse_args()
@@ -100,7 +103,15 @@ def load_all(model, optimizer, path):
     for n, p in model.named_parameters():
         if n not in old_name_id_map and re.match('.*layer.*bn2.((weight)|(bias))$', n):
             logger.info('reinitializing param {} ...'.format(n))
-            p.data.zero_()
+            if args.initializer == 'zero':
+                p.data.zero_()
+            elif args.initializer == 'uniform':
+                p.data.uniform_(0.0, to=args.init_meta)
+            elif args.initializer == 'gaussian':
+                p.data.normal_(0.0, std=args.init_meta)
+            else:
+                logger.fatal('Unknown --initializer.')
+                exit()
 
     # load existing states, and insert missing states as empty dict
     new_checkpoint = deepcopy(optimizer.state_dict())
@@ -200,7 +211,7 @@ optimizer = get_optimizer(net)
 
 # Training
 def train(epoch, net):
-    logger.info('\nEpoch: %d (train)' % epoch)
+    logger.info('\nTraining epoch %d @ %.1f sec' % (epoch, time.time()))
     net.train()
     train_loss = 0
     correct = 0
@@ -223,7 +234,7 @@ def train(epoch, net):
     return train_loss / len(trainloader), 100.*correct/total
 
 def test(epoch, net, save=False):
-    logger.info('Epoch: %d (test)' % epoch)
+    logger.info('Testing epoch %d @ %.1f sec' % (epoch, time.time()))
     global best_acc
     net.eval()
     test_loss = 0
