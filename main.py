@@ -34,7 +34,7 @@ parser.add_argument('--optimizer', '--opt', default='sgd', type=str, help='sgd v
 parser.add_argument('--initializer', '--init', default='uniform', type=str, help='initializers of new structures (zero, uniform, gaussian)')
 parser.add_argument('--init-meta', default=1.0, type=float, help='a meta parameter for initializer')
 
-parser.add_argument('--grow-interval', '--gi', default=30, type=int, help='an interval (in epochs) to grow new structures')
+parser.add_argument('--grow-interval', '--gi', default=100, type=int, help='an interval (in epochs) to grow new structures')
 parser.add_argument('--grow-threshold', '--gt', default=0.1, type=float, help='the accuracy threshold to grow or stop')
 parser.add_argument('--net', default='1-1-1-1', type=str, help='starting net')
 parser.add_argument('--epochs', default=4000, type=int, help='the number of epochs')
