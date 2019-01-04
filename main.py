@@ -270,7 +270,7 @@ def test(epoch, net, save=False):
     return test_loss / len(testloader), acc
 
 # main func
-emv = utils.ExponentialMovingAverage(decay=0.95)
+ema = utils.ExponentialMovingAverage(decay=0.95)
 growed = False  # if growed in the recent interval
 
 def next_group(g, maxlim, arch):
@@ -296,7 +296,7 @@ for interval in range(0, intervals):
     # grow or stop
     grow_check = interval > 0
     if grow_check:  # check after every interval
-        delta_accu = emv.delta(-1 - args.grow_interval, -1)
+        delta_accu = ema.delta(-1 - args.grow_interval, -1)
         logger.info(
             '******> improved %.3f (ExponentialMovingAverage) in the last %d epochs' % (delta_accu, args.grow_interval))
         if can_grow(max_arch, current_arch) and delta_accu < args.grow_threshold:
@@ -323,10 +323,10 @@ for interval in range(0, intervals):
         curves[epoch, 0] = epoch
         curves[epoch, 1], curves[epoch, 2] = train(epoch, net)
         curves[epoch, 3], curves[epoch, 4] = test(epoch, net, save=True)
-        emv.push(curves[epoch, 4])
+        ema.push(curves[epoch, 4])
 
     if grow_check:  # check after every interval
-        delta_accu = emv.delta(-1 - args.grow_interval, -1)
+        delta_accu = ema.delta(-1 - args.grow_interval, -1)
         if growed and delta_accu < args.grow_threshold: # just growed but no improvement
             max_arch[growing_group] = current_arch[growing_group]
             logger.info('******> stop growing group %d permanently. Limited as %s .' % (growing_group, list_to_str(max_arch)))
@@ -372,8 +372,11 @@ for idx in range(len(plot_segs)-1):
         ax1.semilogy(curves[start:end, 0], curves[start:end, 3], '-', color=[c*coef for c in clr1], markersize=markersize, label='_nolegend_')
         ax2.plot(curves[start:end, 0], curves[start:end, 2], '--', color=[c*coef for c in clr2], markersize=markersize, label='_nolegend_')
         ax2.plot(curves[start:end, 0], curves[start:end, 4], '-', color=[c*coef for c in clr2], markersize=markersize, label='_nolegend_')
+ax2.plot(ema.get(), ':', color=clr2)
+logger.info('Val accuracy moving average: \n {}'.format(np.array_str(np.array(ema.get()))))
+ax2.set_ylim(bottom=80, top=100)
 ax1.legend(('Train loss', 'Val loss'), loc='lower right')
-ax2.legend(('Train accuracy', 'Val accuracy'), loc='upper left')
+ax2.legend(('Train accuracy', 'Val accuracy', 'Val moving avg'), loc='upper left')
 plt.savefig(os.path.join(save_path, 'curves.pdf'))
 
 logger.info('Done!')
