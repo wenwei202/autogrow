@@ -38,6 +38,7 @@ parser.add_argument('--grow-interval', '--gi', default=100, type=int, help='an i
 parser.add_argument('--grow-threshold', '--gt', default=0.1, type=float, help='the accuracy threshold to grow or stop')
 parser.add_argument('--net', default='1-1-1-1', type=str, help='starting net')
 parser.add_argument('--epochs', default=4000, type=int, help='the number of epochs')
+parser.add_argument('--tail-epochs', '--te', default=200, type=int, help='the number of epochs after growing epochs (--epochs) for sgd optimizer')
 parser.add_argument('--batch-size', '--bz', default=128, type=int, help='batch size')
 parser.add_argument('--resume', '-r', action='store_true', help='resume from checkpoint')
 args = parser.parse_args()
@@ -137,11 +138,10 @@ def load_all(model, optimizer, path):
 
     return epoch
 
-def adjust_learning_rate(optimizer, epoch, args):
-    """Sets the learning rate to the initial LR decayed by 10 every 100 epochs"""
-    lr = args.lr * (0.1 ** (epoch // 100))
+def decay_learning_rate(optimizer):
+    """Sets the learning rate to the initial LR decayed by 10"""
     for param_group in optimizer.param_groups:
-        param_group['lr'] = lr
+        param_group['lr'] = param_group['lr'] * 0.1
 
 device = 'cuda' # if torch.cuda.is_available() else 'cpu'
 best_acc = 0  # best test accuracy
@@ -289,9 +289,11 @@ def can_grow(maxlim, arch):
             return True
     return False
 
+num_tail_epochs = args.tail_epochs if args.optimizer == 'sgd' else 0
+last_epoch = -1
 growing_epochs = []
 intervals = (args.epochs - 1) // args.grow_interval + 1
-curves = np.zeros((intervals*args.grow_interval, 5)) # epoch, train loss, train accu, test loss, test accu
+curves = np.zeros((intervals*args.grow_interval + num_tail_epochs, 5)) # epoch, train loss, train accu, test loss, test accu
 for interval in range(0, intervals):
     # grow or stop
     grow_check = interval > 0
@@ -318,8 +320,6 @@ for interval in range(0, intervals):
 
     # training and testing
     for epoch in range(interval*args.grow_interval, (interval+1)*args.grow_interval):
-        if 'sgd' == args.optimizer:
-            adjust_learning_rate(optimizer, epoch, args)
         curves[epoch, 0] = epoch
         curves[epoch, 1], curves[epoch, 2] = train(epoch, net)
         curves[epoch, 3], curves[epoch, 4] = test(epoch, net, save=True)
@@ -337,8 +337,17 @@ for interval in range(0, intervals):
                 logger.info('******> stop growing all groups')
                 last_epoch = (interval + 1) * args.grow_interval - 1
                 logger.info('******> reach limitation. Finished in advance @ epoch %d' % last_epoch)
-                curves = curves[:last_epoch+1, :]
+                curves = curves[:last_epoch+1+num_tail_epochs, :]
                 break
+
+for epoch in range(last_epoch + 1, last_epoch + 1 + num_tail_epochs):
+    if (epoch == last_epoch + 1) or (epoch == last_epoch + 1 + num_tail_epochs // 2):
+        logger.info('======> decaying learning rate')
+        decay_learning_rate(optimizer)
+    curves[epoch, 0] = epoch
+    curves[epoch, 1], curves[epoch, 2] = train(epoch, net)
+    curves[epoch, 3], curves[epoch, 4] = test(epoch, net, save=True)
+    ema.push(curves[epoch, 4])
 
 # plotting
 plot_segs = [0] + growing_epochs
