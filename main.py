@@ -339,6 +339,7 @@ for interval in range(0, intervals):
                 logger.info('******> reach limitation. Finished in advance @ epoch %d' % last_epoch)
                 curves = curves[:last_epoch+1+num_tail_epochs, :]
                 break
+    last_epoch = (interval + 1) * args.grow_interval - 1
 
 for epoch in range(last_epoch + 1, last_epoch + 1 + num_tail_epochs):
     if (epoch == last_epoch + 1) or (epoch == last_epoch + 1 + num_tail_epochs // 2):
