@@ -102,9 +102,15 @@ def load_all(model, optimizer, path):
     new_id_name_map = params_id_to_name(model)
     # load existing params, and initializing missing ones
     model.load_state_dict(checkpoint['model_state_dict'], strict=False)
+    new_params = []
     for n, p in model.named_parameters():
-        if n not in old_name_id_map and re.match('.*layer.*bn2.((weight)|(bias))$', n):
+        if n not in old_name_id_map and re.match('.*layer.*bn2\.bias$', n):
             logger.info('reinitializing param {} ...'.format(n))
+            p.data.zero_()
+            new_params.append(p)
+        elif n not in old_name_id_map and re.match('.*layer.*bn2\.weight$', n):
+            logger.info('reinitializing param {} ...'.format(n))
+            new_params.append(p)
             if args.initializer == 'zero':
                 logger.info('******> Initializing as zeros...')
                 p.data.zero_()
@@ -114,23 +120,24 @@ def load_all(model, optimizer, path):
             elif args.initializer == 'gaussian':
                 logger.info('******> Initializing by gaussian noises')
                 p.data.normal_(0.0, std=args.init_meta)
-            elif args.initializer == 'adam':
-                logger.info('******> Using adam to find a good initialization')
-                old_train_accu = checkpoint['train_accu']
-                local_optimizer = optim.Adam([p], lr=0.001, weight_decay=5e-4)
-                max_epoch = 10
-                founded = False
-                for e in range(max_epoch):
-                    _, accu = train(e, model, local_optimizer)
-                    if accu > old_train_accu - 0.5:
-                        logger.info('******> Found a good initial position with training accuracy %.2f (vs. old %.2f)' % (accu, old_train_accu))
-                        founded = True
-                        break
-                if not founded:
-                    logger.info('******> failed to find a good initial position in %d epochs' % max_epoch)
             else:
                 logger.fatal('Unknown --initializer.')
                 exit()
+    if len(new_params) and args.initializer == 'adam':
+        logger.info('******> Using adam to find a good initialization')
+        old_train_accu = checkpoint['train_accu']
+        local_optimizer = optim.Adam(new_params, lr=0.001, weight_decay=5e-4)
+        max_epoch = 10
+        founded = False
+        for e in range(max_epoch):
+            _, accu = train(e, model, local_optimizer)
+            if accu > old_train_accu - 0.5:
+                logger.info('******> Found a good initial position with training accuracy %.2f (vs. old %.2f) at epoch %d' % (
+                accu, old_train_accu, e))
+                founded = True
+                break
+        if not founded:
+            logger.info('******> failed to find a good initial position in %d epochs. Continue...' % max_epoch)
 
     # load existing states, and insert missing states as empty dict
     new_checkpoint = deepcopy(optimizer.state_dict())
