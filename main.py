@@ -31,7 +31,7 @@ import time
 parser = argparse.ArgumentParser(description='PyTorch CIFAR10 Training')
 parser.add_argument('--lr', default=0.1, type=float, help='learning rate')
 parser.add_argument('--optimizer', '--opt', default='sgd', type=str, help='sgd variants (sgd, adam, amsgrad, adagrad, adadelta, rmsprop)')
-parser.add_argument('--initializer', '--init', default='uniform', type=str, help='initializers of new structures (zero, uniform, gaussian)')
+parser.add_argument('--initializer', '--init', default='uniform', type=str, help='initializers of new structures (zero, uniform, gaussian, adam)')
 parser.add_argument('--init-meta', default=1.0, type=float, help='a meta parameter for initializer')
 
 parser.add_argument('--grow-interval', '--gi', default=100, type=int, help='an interval (in epochs) to grow new structures')
@@ -87,9 +87,10 @@ def params_name_to_id(net):
         themap[k] = id(v)
     return themap
 
-def save_all(epoch, model, optimizer, path):
+def save_all(epoch, train_accu, model, optimizer, path):
     torch.save({
         'epoch': epoch,
+        'train_accu': train_accu,
         'model_state_dict': model.state_dict(),
         'optimizer_state_dict': optimizer.state_dict(),
         'name_id_map': params_name_to_id(model),
@@ -105,11 +106,28 @@ def load_all(model, optimizer, path):
         if n not in old_name_id_map and re.match('.*layer.*bn2.((weight)|(bias))$', n):
             logger.info('reinitializing param {} ...'.format(n))
             if args.initializer == 'zero':
+                logger.info('******> Initializing as zeros...')
                 p.data.zero_()
             elif args.initializer == 'uniform':
+                logger.info('******> Initializing by uniform noises...')
                 p.data.uniform_(0.0, to=args.init_meta)
             elif args.initializer == 'gaussian':
+                logger.info('******> Initializing by gaussian noises')
                 p.data.normal_(0.0, std=args.init_meta)
+            elif args.initializer == 'adam':
+                logger.info('******> Using adam to find a good initialization')
+                old_train_accu = checkpoint['train_accu']
+                local_optimizer = optim.Adam([p], lr=0.001, weight_decay=5e-4)
+                max_epoch = 10
+                founded = False
+                for e in range(max_epoch):
+                    _, accu = train(e, model, local_optimizer)
+                    if accu > old_train_accu - 0.5:
+                        logger.info('******> Found a good initial position with training accuracy %.2f (vs. old %.2f)' % (accu, old_train_accu))
+                        founded = True
+                        break
+                if not founded:
+                    logger.info('******> failed to find a good initial position in %d epochs' % max_epoch)
             else:
                 logger.fatal('Unknown --initializer.')
                 exit()
@@ -210,7 +228,7 @@ criterion = nn.CrossEntropyLoss()
 optimizer = get_optimizer(net)
 
 # Training
-def train(epoch, net):
+def train(epoch, net, own_optimizer=None):
     logger.info('\nTraining epoch %d @ %.1f sec' % (epoch, time.time()))
     net.train()
     train_loss = 0
@@ -218,11 +236,17 @@ def train(epoch, net):
     total = 0
     for batch_idx, (inputs, targets) in enumerate(trainloader):
         inputs, targets = inputs.to(device), targets.to(device)
-        optimizer.zero_grad()
+        if own_optimizer is not None:
+            own_optimizer.zero_grad()
+        else:
+            optimizer.zero_grad()
         outputs = net(inputs)
         loss = criterion(outputs, targets)
         loss.backward()
-        optimizer.step()
+        if own_optimizer is not None:
+            own_optimizer.step()
+        else:
+            optimizer.step()
 
         train_loss += loss.item()
         _, predicted = outputs.max(1)
@@ -304,7 +328,7 @@ for interval in range(0, intervals):
         if can_grow(max_arch, current_arch) and delta_accu < args.grow_threshold:
             # save current model
             save_ckpt = os.path.join(save_path, 'resnet-{}_ckpt.t7'.format(list_to_str(current_arch)))
-            save_all(interval*args.grow_interval - 1, net, optimizer, save_ckpt)
+            save_all(interval*args.grow_interval - 1, curves[interval*args.grow_interval - 1, 2], net, optimizer, save_ckpt)
             # create a new net and optimizer
             current_arch[growing_group] += 1
             logger.info('******> growing to resnet-%s before epoch %d' % (list_to_str(current_arch), interval*args.grow_interval))
@@ -356,6 +380,7 @@ if len(growing_epochs) == 0 or growing_epochs[-1] != curves.shape[0]-1:
     plot_segs = plot_segs + [curves.shape[0]-1]
 logger.info('growing epochs {}'.format(list_to_str(growing_epochs)))
 logger.info('curves: \n {}'.format(np.array_str(curves)))
+np.savetxt(os.path.join(save_path, 'curves.dat'), curves)
 clr1 = (0.5, 0., 0.)
 clr2 = (0.0, 0.5, 0.)
 fig, ax1 = plt.subplots()
@@ -382,11 +407,12 @@ for idx in range(len(plot_segs)-1):
         ax1.semilogy(curves[start:end, 0], curves[start:end, 3], '-', color=[c*coef for c in clr1], markersize=markersize, label='_nolegend_')
         ax2.plot(curves[start:end, 0], curves[start:end, 2], '--', color=[c*coef for c in clr2], markersize=markersize, label='_nolegend_')
         ax2.plot(curves[start:end, 0], curves[start:end, 4], '-', color=[c*coef for c in clr2], markersize=markersize, label='_nolegend_')
-ax2.plot(ema.get(), ':', color=clr2)
+ax2.plot(ema.get(), '-', color=[1.0, 0, 1.0])
 logger.info('Val accuracy moving average: \n {}'.format(np.array_str(np.array(ema.get()))))
-# ax2.set_ylim(bottom=40, top=100)
+np.savetxt(os.path.join(save_path, 'ema.dat'), np.array(ema.get()))
+ax2.set_ylim(bottom=40, top=100)
 ax1.legend(('Train loss', 'Val loss'), loc='lower right')
-ax2.legend(('Train accuracy', 'Val accuracy', 'Val moving avg'), loc='upper left')
+ax2.legend(('Train accuracy', 'Val accuracy', 'Val moving avg'), loc='lower left')
 plt.savefig(os.path.join(save_path, 'curves.pdf'))
 
 logger.info('Done!')
