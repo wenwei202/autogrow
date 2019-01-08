@@ -120,6 +120,8 @@ def load_all(model, optimizer, path):
             elif args.initializer == 'gaussian':
                 logger.info('******> Initializing by gaussian noises')
                 p.data.normal_(0.0, std=args.init_meta)
+            elif args.initializer == 'adam':
+                logger.info('******> Initializing by adam optimizer')
             else:
                 logger.fatal('Unknown --initializer.')
                 exit()
