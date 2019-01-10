@@ -34,13 +34,16 @@ parser.add_argument('--optimizer', '--opt', default='sgd', type=str, help='sgd v
 parser.add_argument('--initializer', '--init', default='uniform', type=str, help='initializers of new structures (zero, uniform, gaussian, adam)')
 parser.add_argument('--init-meta', default=1.0, type=float, help='a meta parameter for initializer')
 
+parser.add_argument('--ema-params', '-ep', action='store_true', help='validating accuracy by a exponentially moving average of parameters')
 parser.add_argument('--grow-interval', '--gi', default=100, type=int, help='an interval (in epochs) to grow new structures')
-parser.add_argument('--grow-threshold', '--gt', default=0.1, type=float, help='the accuracy threshold to grow or stop')
 parser.add_argument('--net', default='1-1-1-1', type=str, help='starting net')
 parser.add_argument('--epochs', default=4000, type=int, help='the number of epochs')
+
+parser.add_argument('--grow-threshold', '--gt', default=0.1, type=float, help='the accuracy threshold to grow or stop')
 parser.add_argument('--tail-epochs', '--te', default=100, type=int, help='the number of epochs after growing epochs (--epochs) for sgd optimizer')
 parser.add_argument('--batch-size', '--bz', default=128, type=int, help='batch size')
 parser.add_argument('--resume', '-r', action='store_true', help='resume from checkpoint')
+
 args = parser.parse_args()
 
 def list_to_str(l):
@@ -235,7 +238,7 @@ net = get_module('ResNetBasic', current_arch)
 
 criterion = nn.CrossEntropyLoss()
 optimizer = get_optimizer(net)
-
+param_ema = utils.TorchExponentialMovingAverage()
 # Training
 def train(epoch, net, own_optimizer=None):
     logger.info('\nTraining epoch %d @ %.1f sec' % (epoch, time.time()))
@@ -256,6 +259,11 @@ def train(epoch, net, own_optimizer=None):
             own_optimizer.step()
         else:
             optimizer.step()
+        # maintain a moving average
+        params_data_dict = {}
+        for n, p in net.named_parameters():
+            params_data_dict[n] = p.data
+        param_ema.push(params_data_dict)
 
         train_loss += loss.item()
         _, predicted = outputs.max(1)
@@ -274,6 +282,9 @@ def test(epoch, net, save=False):
     correct = 0
     total = 0
     with torch.no_grad():
+        if args.ema_params:
+            logger.info('Using average params for test')
+            orig_params = utils.set_named_parameters(net, param_ema.average(), strict=False)
         for batch_idx, (inputs, targets) in enumerate(testloader):
             inputs, targets = inputs.to(device), targets.to(device)
             outputs = net(inputs)
@@ -299,6 +310,10 @@ def test(epoch, net, save=False):
         }
         torch.save(state, os.path.join(save_path, 'best_ckpt.t7'))
     best_acc = acc if acc > best_acc else best_acc
+
+    with torch.no_grad():
+        if args.ema_params:
+            utils.set_named_parameters(net, orig_params, strict=True)
 
     return test_loss / len(testloader), acc
 
@@ -336,7 +351,7 @@ for interval in range(0, intervals):
             '******> improved %.3f (ExponentialMovingAverage) in the last %d epochs' % (delta_accu, args.grow_interval))
         if can_grow(max_arch, current_arch) and delta_accu < args.grow_threshold:
             # save current model
-            save_ckpt = os.path.join(save_path, 'resnet-{}_ckpt.t7'.format(list_to_str(current_arch)))
+            save_ckpt = os.path.join(save_path, 'resnet-growing_ckpt.t7')
             save_all(interval*args.grow_interval - 1, curves[interval*args.grow_interval - 1, 2], net, optimizer, save_ckpt)
             # create a new net and optimizer
             current_arch[growing_group] += 1
