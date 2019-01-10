@@ -107,11 +107,7 @@ def load_all(model, optimizer, path):
     model.load_state_dict(checkpoint['model_state_dict'], strict=False)
     new_params = []
     for n, p in model.named_parameters():
-        if n not in old_name_id_map and re.match('.*layer.*bn2\.bias$', n):
-            logger.info('reinitializing param {} ...'.format(n))
-            p.data.zero_()
-            new_params.append(p)
-        elif n not in old_name_id_map and re.match('.*layer.*bn2\.weight$', n):
+        if n not in old_name_id_map and re.match('.*layer.*bn2\.((weight)|(bias))$', n):
             logger.info('reinitializing param {} ...'.format(n))
             new_params.append(p)
             if args.initializer == 'zero':
