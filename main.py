@@ -32,9 +32,9 @@ parser = argparse.ArgumentParser(description='PyTorch CIFAR10 Training')
 parser.add_argument('--lr', default=0.1, type=float, help='learning rate')
 parser.add_argument('--optimizer', '--opt', default='sgd', type=str, help='sgd variants (sgd, adam, amsgrad, adagrad, adadelta, rmsprop)')
 parser.add_argument('--initializer', '--init', default='uniform', type=str, help='initializers of new structures (zero, uniform, gaussian, adam)')
-parser.add_argument('--init-meta', default=1.0, type=float, help='a meta parameter for initializer')
-
 parser.add_argument('--ema-params', '-ep', action='store_true', help='validating accuracy by a exponentially moving average of parameters')
+
+parser.add_argument('--init-meta', default=1.0, type=float, help='a meta parameter for initializer')
 parser.add_argument('--grow-interval', '--gi', default=100, type=int, help='an interval (in epochs) to grow new structures')
 parser.add_argument('--net', default='1-1-1-1', type=str, help='starting net')
 parser.add_argument('--epochs', default=4000, type=int, help='the number of epochs')
@@ -337,7 +337,8 @@ num_tail_epochs = args.tail_epochs if args.optimizer == 'sgd' else 0
 last_epoch = -1
 growing_epochs = []
 intervals = (args.epochs - 1) // args.grow_interval + 1
-curves = np.zeros((intervals*args.grow_interval + num_tail_epochs, 5)) # epoch, train loss, train accu, test loss, test accu
+# epoch, train loss, train accu, test loss, test accu, timestamps
+curves = np.zeros((intervals*args.grow_interval + num_tail_epochs, 6))
 for interval in range(0, intervals):
     # grow or stop
     grow_check = interval > 0
@@ -367,6 +368,7 @@ for interval in range(0, intervals):
         curves[epoch, 0] = epoch
         curves[epoch, 1], curves[epoch, 2] = train(epoch, net)
         curves[epoch, 3], curves[epoch, 4] = test(epoch, net, save=True)
+        curves[epoch, 5] = time.time() / 60.0
         ema.push(curves[epoch, 4])
 
     if grow_check:  # check after every interval
@@ -392,7 +394,12 @@ for epoch in range(last_epoch + 1, last_epoch + 1 + num_tail_epochs):
     curves[epoch, 0] = epoch
     curves[epoch, 1], curves[epoch, 2] = train(epoch, net)
     curves[epoch, 3], curves[epoch, 4] = test(epoch, net, save=True)
+    curves[epoch, 5] = time.time() / 60.0
     ema.push(curves[epoch, 4])
+
+# align time
+for e in range(curves.shape[0]):
+    curves[curves.shape[0]-1-e, 5] -= curves[0, 5]
 
 # plotting
 plot_segs = [0] + growing_epochs
@@ -404,13 +411,21 @@ np.savetxt(os.path.join(save_path, 'curves.dat'), curves)
 clr1 = (0.5, 0., 0.)
 clr2 = (0.0, 0.5, 0.)
 fig, ax1 = plt.subplots()
+fig2, ax3 = plt.subplots()
 ax2 = ax1.twinx()
+ax4 = ax3.twinx()
 ax1.set_xlabel('epoch')
 ax1.set_ylabel('Loss', color=clr1)
 ax1.tick_params(axis='y', colors=clr1)
-ax2.set_xlabel('epoch')
 ax2.set_ylabel('Accuracy (%)', color=clr2)
 ax2.tick_params(axis='y', colors=clr2)
+
+ax3.set_xlabel('time (mins)')
+ax3.set_ylabel('Loss', color=clr1)
+ax3.tick_params(axis='y', colors=clr1)
+ax4.set_ylabel('Accuracy (%)', color=clr2)
+ax4.tick_params(axis='y', colors=clr2)
+
 # ax2.set_ylim(80, 100) # no plot if enabled
 for idx in range(len(plot_segs)-1):
     start = plot_segs[idx]
@@ -422,17 +437,35 @@ for idx in range(len(plot_segs)-1):
         ax1.semilogy(curves[start:end, 0], curves[start:end, 3], '-', color=[c*coef for c in clr1], markersize=markersize)
         ax2.plot(curves[start:end, 0], curves[start:end, 2], '--', color=[c*coef for c in clr2], markersize=markersize)
         ax2.plot(curves[start:end, 0], curves[start:end, 4], '-', color=[c*coef for c in clr2], markersize=markersize)
+
+        ax3.semilogy(curves[start:end, 5], curves[start:end, 1], '--', color=[c * coef for c in clr1], markersize=markersize)
+        ax3.semilogy(curves[start:end, 5], curves[start:end, 3], '-', color=[c * coef for c in clr1], markersize=markersize)
+        ax4.plot(curves[start:end, 5], curves[start:end, 2], '--', color=[c * coef for c in clr2], markersize=markersize)
+        ax4.plot(curves[start:end, 5], curves[start:end, 4], '-', color=[c * coef for c in clr2], markersize=markersize)
     else:
         ax1.semilogy(curves[start:end, 0], curves[start:end, 1], '--', color=[c*coef for c in clr1], markersize=markersize, label='_nolegend_')
         ax1.semilogy(curves[start:end, 0], curves[start:end, 3], '-', color=[c*coef for c in clr1], markersize=markersize, label='_nolegend_')
         ax2.plot(curves[start:end, 0], curves[start:end, 2], '--', color=[c*coef for c in clr2], markersize=markersize, label='_nolegend_')
         ax2.plot(curves[start:end, 0], curves[start:end, 4], '-', color=[c*coef for c in clr2], markersize=markersize, label='_nolegend_')
+
+        ax3.semilogy(curves[start:end, 5], curves[start:end, 1], '--', color=[c * coef for c in clr1], markersize=markersize, label='_nolegend_')
+        ax3.semilogy(curves[start:end, 5], curves[start:end, 3], '-', color=[c * coef for c in clr1], markersize=markersize, label='_nolegend_')
+        ax4.plot(curves[start:end, 5], curves[start:end, 2], '--', color=[c * coef for c in clr2], markersize=markersize, label='_nolegend_')
+        ax4.plot(curves[start:end, 5], curves[start:end, 4], '-', color=[c * coef for c in clr2], markersize=markersize, label='_nolegend_')
+
 ax2.plot(ema.get(), '-', color=[1.0, 0, 1.0])
 logger.info('Val accuracy moving average: \n {}'.format(np.array_str(np.array(ema.get()))))
 np.savetxt(os.path.join(save_path, 'ema.dat'), np.array(ema.get()))
 ax2.set_ylim(bottom=40, top=100)
 ax1.legend(('Train loss', 'Val loss'), loc='lower right')
 ax2.legend(('Train accuracy', 'Val accuracy', 'Val moving avg'), loc='lower left')
-plt.savefig(os.path.join(save_path, 'curves.pdf'))
+fig.savefig(os.path.join(save_path, 'curves-vs-epochs.pdf'))
+
+ax4.plot(ema.get(), '-', color=[1.0, 0, 1.0])
+ax4.set_ylim(bottom=40, top=100)
+ax3.legend(('Train loss', 'Val loss'), loc='lower right')
+ax4.legend(('Train accuracy', 'Val accuracy', 'Val moving avg'), loc='lower left')
+fig2.savefig(os.path.join(save_path, 'curves-vs-time.pdf'))
+
 
 logger.info('Done!')
