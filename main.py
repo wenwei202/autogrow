@@ -453,7 +453,7 @@ for idx in range(len(plot_segs)-1):
         ax4.plot(curves[start:end, 5], curves[start:end, 2], '--', color=[c * coef for c in clr2], markersize=markersize, label='_nolegend_')
         ax4.plot(curves[start:end, 5], curves[start:end, 4], '-', color=[c * coef for c in clr2], markersize=markersize, label='_nolegend_')
 
-ax2.plot(ema.get(), '-', color=[1.0, 0, 1.0])
+ax2.plot(curves[:, 0], ema.get(), '-', color=[1.0, 0, 1.0])
 logger.info('Val accuracy moving average: \n {}'.format(np.array_str(np.array(ema.get()))))
 np.savetxt(os.path.join(save_path, 'ema.dat'), np.array(ema.get()))
 ax2.set_ylim(bottom=40, top=100)
@@ -461,7 +461,7 @@ ax1.legend(('Train loss', 'Val loss'), loc='lower right')
 ax2.legend(('Train accuracy', 'Val accuracy', 'Val moving avg'), loc='lower left')
 fig.savefig(os.path.join(save_path, 'curves-vs-epochs.pdf'))
 
-ax4.plot(ema.get(), '-', color=[1.0, 0, 1.0])
+ax4.plot(curves[:, 5], ema.get(), '-', color=[1.0, 0, 1.0])
 ax4.set_ylim(bottom=40, top=100)
 ax3.legend(('Train loss', 'Val loss'), loc='lower right')
 ax4.legend(('Train accuracy', 'Val accuracy', 'Val moving avg'), loc='lower left')
