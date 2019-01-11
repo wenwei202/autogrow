@@ -37,24 +37,24 @@ class TorchExponentialMovingAverage(object):
     def __init__(self, decay=0.999):
         self.decay = decay
         self.ema = {}
-        self.number = 0
+        self.number = {}
 
     def push(self, current_data):
         assert isinstance(current_data, dict), "current_data should be a dict"
-        self.number += 1
         for key in current_data:
             if key in self.ema:
                 # in-place
                 self.ema[key] -= (1.0 - self.decay) * (self.ema[key] - current_data[key])
+                self.number[key] += 1
             else:
                 # self.ema[key] = copy.deepcopy(current_data[key])
                 self.ema[key] = current_data[key] * (1.0 - self.decay)
+                self.number[key] = 1
 
     def average(self):
         scaled_ema = {}
-        scaler = 1.0 / (1.0 - self.decay ** self.number)
         for key in self.ema:
-            scaled_ema[key] = self.ema[key] * scaler
+            scaled_ema[key] = self.ema[key] / (1.0 - self.decay ** self.number[key])
         return scaled_ema
 
 
