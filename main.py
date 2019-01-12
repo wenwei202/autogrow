@@ -32,7 +32,8 @@ parser = argparse.ArgumentParser(description='PyTorch CIFAR10 Training')
 parser.add_argument('--lr', default=0.1, type=float, help='learning rate')
 parser.add_argument('--optimizer', '--opt', default='sgd', type=str, help='sgd variants (sgd, adam, amsgrad, adagrad, adadelta, rmsprop)')
 parser.add_argument('--initializer', '--init', default='uniform', type=str, help='initializers of new structures (zero, uniform, gaussian, adam)')
-parser.add_argument('--ema-params', '-ep', action='store_true', help='validating accuracy by a exponentially moving average of parameters')
+parser.add_argument('--ema-params', '--ep', action='store_true', help='validating accuracy by a exponentially moving average of parameters')
+parser.add_argument('--residual', default='ResNetBasic', type=str, help='the type of residual block (ResNetBasic or ResNetBottleneck)')
 
 parser.add_argument('--init-meta', default=1.0, type=float, help='a meta parameter for initializer')
 parser.add_argument('--grow-interval', '--gi', default=100, type=int, help='an interval (in epochs) to grow new structures')
@@ -106,8 +107,15 @@ def load_all(model, optimizer, path):
     # load existing params, and initializing missing ones
     model.load_state_dict(checkpoint['model_state_dict'], strict=False)
     new_params = []
+    if args.residual == 'ResNetBasic':
+        reinit_pattern = '.*layer.*bn2\.((weight)|(bias))$'
+    elif args.residual == 'ResNetBottleneck':
+        reinit_pattern = '.*layer.*bn3\.((weight)|(bias))$'
+    else:
+        logger.fatal('Unknown --residual')
+        exit()
     for n, p in model.named_parameters():
-        if n not in old_name_id_map and re.match('.*layer.*bn2\.((weight)|(bias))$', n):
+        if n not in old_name_id_map and re.match(reinit_pattern, n):
             logger.info('reinitializing param {} ...'.format(n))
             new_params.append(p)
             if args.initializer == 'zero':
@@ -219,7 +227,7 @@ for cnt, v in enumerate(current_arch):
         growing_group = cnt
         break
 
-net = get_module('ResNetBasic', current_arch)
+net = get_module(args.residual, current_arch)
 # net = VGG('VGG19')
 # net = ResNet18()
 # net = PreActResNet18()
@@ -353,7 +361,7 @@ for interval in range(0, intervals):
             # create a new net and optimizer
             current_arch[growing_group] += 1
             logger.info('******> growing to resnet-%s before epoch %d' % (list_to_str(current_arch), interval*args.grow_interval))
-            net = get_module("ResNetBasic", num_blocks=current_arch)
+            net = get_module(args.residual, num_blocks=current_arch)
             optimizer = get_optimizer(net)
             loaded_epoch = load_all(net, optimizer, save_ckpt)
             logger.info('testing new model ...')

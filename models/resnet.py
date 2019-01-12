@@ -96,12 +96,14 @@ class ResNet(nn.Module):
         out = self.linear(out)
         return out
 
+def ResNetBasic(num_blocks):
+    return ResNet(BasicBlock, num_blocks)
+
+def ResNetBottleneck(num_blocks):
+    return ResNet(Bottleneck, num_blocks)
 
 def ResNet18():
     return ResNet(BasicBlock, [2,2,2,2])
-
-def ResNetBasic(num_blocks):
-    return ResNet(BasicBlock, num_blocks)
 
 def ResNet34():
     return ResNet(BasicBlock, [3,4,6,3])
