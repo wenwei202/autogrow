@@ -33,7 +33,7 @@ parser.add_argument('--lr', default=0.1, type=float, help='learning rate')
 parser.add_argument('--optimizer', '--opt', default='sgd', type=str, help='sgd variants (sgd, adam, amsgrad, adagrad, adadelta, rmsprop)')
 parser.add_argument('--initializer', '--init', default='uniform', type=str, help='initializers of new structures (zero, uniform, gaussian, adam)')
 parser.add_argument('--ema-params', '--ep', action='store_true', help='validating accuracy by a exponentially moving average of parameters')
-parser.add_argument('--residual', default='ResNetBasic', type=str, help='the type of residual block (ResNetBasic or ResNetBottleneck)')
+parser.add_argument('--residual', default='ResNetBasic', type=str, help='the type of residual block (ResNetBasic or ResNetBottleneck or CifarResNetBasic)')
 
 parser.add_argument('--init-meta', default=1.0, type=float, help='a meta parameter for initializer')
 parser.add_argument('--grow-interval', '--gi', default=100, type=int, help='an interval (in epochs) to grow new structures')
@@ -107,7 +107,7 @@ def load_all(model, optimizer, path):
     # load existing params, and initializing missing ones
     model.load_state_dict(checkpoint['model_state_dict'], strict=False)
     new_params = []
-    if args.residual == 'ResNetBasic':
+    if args.residual == 'ResNetBasic' or args.residual == 'CifarResNetBasic':
         reinit_pattern = '.*layer.*bn2\.((weight)|(bias))$'
     elif args.residual == 'ResNetBottleneck':
         reinit_pattern = '.*layer.*bn3\.((weight)|(bias))$'
