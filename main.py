@@ -217,7 +217,7 @@ classes = ('plane', 'car', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship'
 # Model
 logger.info('==> Building model..')
 current_arch = list(map(int, args.net.split('-')))
-max_arch = [100, 100, 100, 100]
+max_arch = [100]*len(current_arch)
 if len(current_arch) != len(max_arch):
     logger.fatal('max_arch has different size.')
     exit()
