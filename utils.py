@@ -13,6 +13,28 @@ import copy
 import torch.nn as nn
 import torch.nn.init as init
 
+class MovingMaximum(object):
+    def __init__(self):
+        self.data = [] # data[i] is the maximum val in data[0:i+1]
+        self.max = 0.0
+
+    def push(self, current_data):
+        if len(self.data) == 0:
+            self.max = current_data
+        elif current_data > self.max:
+            self.max = current_data
+        self.data.append(self.max)
+
+    def get(self):
+        return self.data
+
+    def delta(self, start, end):
+        try:
+            res = self.data[end] - self.data[start]
+        except IndexError:
+            res = self.data[end]
+        return res
+
 class ExponentialMovingAverage(object):
     def __init__(self, decay=0.95):
         self.data = []
