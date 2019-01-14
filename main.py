@@ -39,6 +39,7 @@ parser.add_argument('--net', default='1-1-1', type=str, help='starting net')
 parser.add_argument('--residual', default='CifarResNetBasic', type=str, help='the type of residual block (ResNetBasic or ResNetBottleneck or CifarResNetBasic)')
 parser.add_argument('--ema-params', '--ep', action='store_true', help='validating accuracy by a exponentially moving average of parameters')
 parser.add_argument('--initializer', '--init', default='gaussian', type=str, help='initializers of new structures (zero, uniform, gaussian, adam)')
+parser.add_argument('--reset-states', '--rs', action='store_true', help='reset optimizer states or not (such as momentum)')
 
 parser.add_argument('--init-meta', default=1.0, type=float, help='a meta parameter for initializer')
 parser.add_argument('--tail-epochs', '--te', default=100, type=int, help='the number of epochs after growing epochs (--epochs) for sgd optimizer')
@@ -149,24 +150,25 @@ def load_all(model, optimizer, path):
             logger.info('******> failed to find a good initial position in %d epochs. Continue...' % max_epoch)
 
     # load existing states, and insert missing states as empty dict
-    new_checkpoint = deepcopy(optimizer.state_dict())
-    old_checkpoint = checkpoint['optimizer_state_dict']
-    if len(old_checkpoint['param_groups']) != 1 or len(new_checkpoint['param_groups']) != 1:
-        logger.fatal('The number of param_groups is not 1.')
-        exit()
-    for new_id in new_checkpoint['param_groups'][0]['params']:
-        name = new_id_name_map[new_id]
-        if name in old_name_id_map:
-            logger.info('loading param {} state...'.format(name))
-            old_id = old_name_id_map[name]
-            new_checkpoint['state'][new_id] = old_checkpoint['state'][old_id]
-        else:
-            if new_id not in new_checkpoint['state']:
-                logger.info('initializing param {} state as an empty dict...'.format(name))
-                new_checkpoint['state'][new_id] = {}
+    if not args.reset_states:
+        new_checkpoint = deepcopy(optimizer.state_dict())
+        old_checkpoint = checkpoint['optimizer_state_dict']
+        if len(old_checkpoint['param_groups']) != 1 or len(new_checkpoint['param_groups']) != 1:
+            logger.fatal('The number of param_groups is not 1.')
+            exit()
+        for new_id in new_checkpoint['param_groups'][0]['params']:
+            name = new_id_name_map[new_id]
+            if name in old_name_id_map:
+                logger.info('loading param {} state...'.format(name))
+                old_id = old_name_id_map[name]
+                new_checkpoint['state'][new_id] = old_checkpoint['state'][old_id]
             else:
-                logger.info('skipping param {} state (initial state exists)...'.format(name))
-    optimizer.load_state_dict(new_checkpoint)
+                if new_id not in new_checkpoint['state']:
+                    logger.info('initializing param {} state as an empty dict...'.format(name))
+                    new_checkpoint['state'][new_id] = {}
+                else:
+                    logger.info('skipping param {} state (initial state exists)...'.format(name))
+        optimizer.load_state_dict(new_checkpoint)
     # optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
     epoch = checkpoint['epoch']
 
