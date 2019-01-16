@@ -32,16 +32,18 @@ parser.add_argument('--optimizer', '--opt', default='sgd', type=str, help='sgd v
 parser.add_argument('--lr', default=0.1, type=float, help='learning rate')
 parser.add_argument('--epochs', default=4000, type=int, help='the number of epochs')
 parser.add_argument('--grow-threshold', '--gt', default=0.1, type=float, help='the accuracy threshold to grow or stop')
+parser.add_argument('--ema-params', '--ep', action='store_true', help='validating accuracy by a exponentially moving average of parameters')
+parser.add_argument('--growing-mode', default='rate', type=str, help='how new structures are added (rate, all, group)')
 
 parser.add_argument('--grow-interval', '--gi', default=100, type=int, help='an interval (in epochs) to grow new structures')
-parser.add_argument('--growing-metric', '--gm', default='max', type=str, help='the metric for growing (max or avg)')
+parser.add_argument('--growing-metric', default='max', type=str, help='the metric for growing (max or avg)')
 parser.add_argument('--net', default='1-1-1', type=str, help='starting net')
 parser.add_argument('--residual', default='CifarResNetBasic', type=str, help='the type of residual block (ResNetBasic or ResNetBottleneck or CifarResNetBasic)')
-parser.add_argument('--ema-params', '--ep', action='store_true', help='validating accuracy by a exponentially moving average of parameters')
 parser.add_argument('--initializer', '--init', default='gaussian', type=str, help='initializers of new structures (zero, uniform, gaussian, adam)')
-parser.add_argument('--reset-states', '--rs', action='store_true', help='reset optimizer states or not (such as momentum)')
 
+parser.add_argument('--reset-states', '--rs', action='store_true', help='reset optimizer states or not (such as momentum)')
 parser.add_argument('--init-meta', default=1.0, type=float, help='a meta parameter for initializer')
+parser.add_argument('--rate', default=0.2, type=float, help='the rate to grow when --growing-mode=rate')
 parser.add_argument('--tail-epochs', '--te', default=100, type=int, help='the number of epochs after growing epochs (--epochs) for sgd optimizer')
 parser.add_argument('--batch-size', '--bz', default=128, type=int, help='batch size')
 parser.add_argument('--resume', '-r', action='store_true', help='resume from checkpoint')
@@ -219,7 +221,7 @@ classes = ('plane', 'car', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship'
 # Model
 logger.info('==> Building model..')
 current_arch = list(map(int, args.net.split('-')))
-max_arch = [100]*len(current_arch)
+max_arch = [18]*len(current_arch)
 if len(current_arch) != len(max_arch):
     logger.fatal('max_arch has different size.')
     exit()
@@ -344,6 +346,34 @@ def next_group(g, maxlim, arch):
             return idx
     return -1
 
+def next_arch(mode, maxlim, arch, rate=0.333, group=0):
+    tmp_arch = [v for v in arch]
+    if 'all' == mode:
+        tmp_arch = [v+1 for v in tmp_arch]
+    elif 'group' == mode:
+        tmp_arch[group] += 1
+    elif 'rate' == mode:
+        num = int(round(sum(arch)*rate))
+        while num >= len(arch):
+            tmp_arch = [v + 1 for v in tmp_arch]
+            num -= len(arch)
+        if num:
+            rperm = np.random.permutation(len(arch))
+            for idx in rperm[:num]:
+                tmp_arch[idx] += 1
+    else:
+        logger.fatal('Unknown mode')
+        exit()
+
+    res = []
+    for r, m in zip(tmp_arch, maxlim):
+        if r > m:
+            res.append(m)
+        else:
+            res.append(r)
+    return res
+
+
 def can_grow(maxlim, arch):
     for maxv, a in zip(maxlim, arch):
         if maxv > a:
@@ -368,7 +398,8 @@ for interval in range(0, intervals):
             save_ckpt = os.path.join(save_path, 'resnet-growing_ckpt.t7')
             save_all(interval*args.grow_interval - 1, curves[interval*args.grow_interval - 1, 2], net, optimizer, save_ckpt)
             # create a new net and optimizer
-            current_arch[growing_group] += 1
+            # current_arch[growing_group] += 1
+            current_arch = next_arch(args.growing_mode, max_arch, current_arch, rate=args.rate, group=growing_group)
             logger.info('******> growing to resnet-%s before epoch %d' % (list_to_str(current_arch), interval*args.grow_interval))
             net = get_module(args.residual, num_blocks=current_arch)
             optimizer = get_optimizer(net)
@@ -391,11 +422,16 @@ for interval in range(0, intervals):
     if grow_check:  # check after every interval
         delta_accu = ema.delta(-1 - args.grow_interval, -1)
         if growed and delta_accu < args.grow_threshold: # just growed but no improvement
-            max_arch[growing_group] = current_arch[growing_group]
-            logger.info('******> stop growing group %d permanently. Limited as %s .' % (growing_group, list_to_str(max_arch)))
+            if args.growing_mode == 'group':
+                max_arch[growing_group] = current_arch[growing_group]
+                logger.info('******> stop growing group %d permanently. Limited as %s .' % (growing_group, list_to_str(max_arch)))
+            else:
+                max_arch[:] = current_arch[:]
+                logger.info('******> stop growing all permanently. Limited as %s .' % (list_to_str(max_arch)))
         if growed:
             if can_grow(max_arch, current_arch):
-                growing_group = next_group(growing_group, max_arch, current_arch)
+                if args.growing_mode == 'group':
+                    growing_group = next_group(growing_group, max_arch, current_arch)
             else:
                 logger.info('******> stop growing all groups')
                 last_epoch = (interval + 1) * args.grow_interval - 1
