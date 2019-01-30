@@ -176,6 +176,12 @@ def load_all(model, optimizer, path):
 
     return epoch
 
+def set_learning_rate(optimizer, lr):
+    """Sets the learning rate """
+    logger.info('\nSetting learning rate to %.6f' % lr)
+    for param_group in optimizer.param_groups:
+        param_group['lr'] = lr
+
 def decay_learning_rate(optimizer):
     """Sets the learning rate to the initial LR decayed by 10"""
     for param_group in optimizer.param_groups:
@@ -413,6 +419,14 @@ for interval in range(0, intervals):
 
     # training and testing
     for epoch in range(interval*args.grow_interval, (interval+1)*args.grow_interval):
+        if 'sgd' == args.optimizer:
+            e = epoch % args.grow_interval
+            if e < args.grow_interval // 2:
+                set_learning_rate(optimizer, args.lr)
+            elif e < args.grow_interval * 3 // 4:
+                set_learning_rate(optimizer, args.lr * 0.1)
+            else:
+                set_learning_rate(optimizer, args.lr * 0.01)
         curves[epoch, 0] = epoch
         curves[epoch, 1], curves[epoch, 2] = train(epoch, net)
         curves[epoch, 3], curves[epoch, 4] = test(epoch, net, save=True)
@@ -440,6 +454,7 @@ for interval in range(0, intervals):
                 break
     last_epoch = (interval + 1) * args.grow_interval - 1
 
+set_learning_rate(optimizer, args.lr * 0.1)
 for epoch in range(last_epoch + 1, last_epoch + 1 + num_tail_epochs):
     if (epoch == last_epoch + 1) or (epoch == last_epoch + 1 + num_tail_epochs // 2):
         logger.info('======> decaying learning rate')
