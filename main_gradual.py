@@ -1,0 +1,564 @@
+'''Train CIFAR10 with PyTorch.'''
+from __future__ import print_function
+
+import matplotlib
+matplotlib.use("pdf")
+import matplotlib.pyplot as plt
+import logging
+from datetime import datetime
+from copy import deepcopy
+import re
+
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import torch.nn.functional as F
+import torch.backends.cudnn as cudnn
+
+import torchvision
+import torchvision.transforms as transforms
+import models.switch as ms
+
+import os
+import argparse
+import numpy as np
+import models
+import utils
+import time
+
+# from models import *
+
+parser = argparse.ArgumentParser(description='PyTorch CIFAR10 Training')
+parser.add_argument('--optimizer', '--opt', default='sgd', type=str, help='sgd variants (sgd, adam, amsgrad, adagrad, adadelta, rmsprop)')
+parser.add_argument('--lr', default=0.1, type=float, help='learning rate')
+parser.add_argument('--epochs', default=4000, type=int, help='the number of epochs')
+parser.add_argument('--grow-threshold', '--gt', default=0.1, type=float, help='the accuracy threshold to grow or stop')
+parser.add_argument('--ema-params', '--ep', action='store_true', help='validating accuracy by a exponentially moving average of parameters')
+parser.add_argument('--growing-mode', default='all', type=str, help='how new structures are added (rate, all, group)')
+
+parser.add_argument('--rate', default=0.4, type=float, help='the rate to grow when --growing-mode=rate')
+parser.add_argument('--grow-interval', '--gi', default=100, type=int, help='an interval (in epochs) to grow new structures')
+parser.add_argument('--net', default='1-1-1', type=str, help='starting net')
+parser.add_argument('--residual', default='CifarResNetBasic', type=str, help='the type of residual block (ResNetBasic or ResNetBottleneck or CifarResNetBasic)')
+parser.add_argument('--initializer', '--init', default='gaussian', type=str, help='initializers of new structures (zero, uniform, gaussian, adam)')
+
+parser.add_argument('--growing-metric', default='max', type=str, help='the metric for growing (max or avg)')
+parser.add_argument('--reset-states', '--rs', action='store_true', help='reset optimizer states or not (such as momentum)')
+parser.add_argument('--init-meta', default=1.0, type=float, help='a meta parameter for initializer')
+parser.add_argument('--tail-epochs', '--te', default=100, type=int, help='the number of epochs after growing epochs (--epochs) for sgd optimizer')
+parser.add_argument('--batch-size', '--bz', default=128, type=int, help='batch size')
+parser.add_argument('--resume', '-r', action='store_true', help='resume from checkpoint')
+
+args = parser.parse_args()
+
+def list_to_str(l):
+    list(map(str, l))
+    s = ''
+    for v in l:
+        s += str(v) + '-'
+    return s[:-1]
+
+def get_module(name, *args, **keywords):
+    net = getattr(models, name)(*args, **keywords)
+    net = net.to('cuda')
+    net = torch.nn.DataParallel(net)
+    cudnn.benchmark = True
+    configure_switch_policy(args.grow_interval)
+    return net
+
+def get_optimizer(net):
+    if 'sgd' == args.optimizer:
+        optimizer = optim.SGD(net.parameters(), lr=args.lr, momentum=0.9, weight_decay=5e-4)
+    elif 'adam' == args.optimizer:
+        optimizer = optim.Adam(net.parameters(), lr=args.lr, weight_decay=5e-4)
+    elif 'amsgrad' == args.optimizer:
+        optimizer = optim.Adam(net.parameters(), lr=args.lr, weight_decay=5e-4, amsgrad=True)
+    elif 'adagrad' == args.optimizer:
+        optimizer = optim.Adagrad(net.parameters(), lr=args.lr, weight_decay=5e-4)
+    elif 'adadelta' == args.optimizer:
+        optimizer = optim.Adadelta(net.parameters(), weight_decay=5e-4)
+    elif 'rmsprop' == args.optimizer:
+        optimizer = optim.RMSprop(net.parameters(), lr=args.lr, alpha=0.99, weight_decay=5e-4)
+    else:
+        logger.fatal('Unknown --optimizer')
+        raise ValueError('Unknown --optimizer')
+    return optimizer
+
+def params_id_to_name(net):
+    themap = {}
+    for k, v in net.named_parameters():
+        themap[id(v)] = k
+    return themap
+
+def params_name_to_id(net):
+    themap = {}
+    for k, v in net.named_parameters():
+        themap[k] = id(v)
+    return themap
+
+def save_all(epoch, train_accu, model, optimizer, path):
+    torch.save({
+        'epoch': epoch,
+        'train_accu': train_accu,
+        'model_state_dict': model.state_dict(),
+        'optimizer_state_dict': optimizer.state_dict(),
+        'name_id_map': params_name_to_id(model),
+    }, path)
+
+def print_switchs(model):
+    for idx, m in enumerate(model.named_modules()):
+        if isinstance(m[1], ms.Switch):
+            logger.info('******> switch {} is {}...'.format(m[0], m[1].get_switch()))
+
+def increase_switchs(model):
+    for idx, m in enumerate(model.named_modules()):
+        if isinstance(m[1], ms.Switch):
+            logger.info('******> increasing switch {}...'.format(m[0]))
+            m[1].increase()
+
+def configure_switch_policy(model, steps, start=0.0, stop=1.0, mode='linear'):
+    for idx, m in enumerate(model.named_modules()):
+        if isinstance(m[1], ms.Switch):
+            logger.info('******> configuring switch {}...'.format(m[0]))
+            m[1].set_params(steps, start, stop, mode)
+
+
+def load_all(model, optimizer, path):
+    checkpoint = torch.load(path)
+    old_name_id_map = checkpoint['name_id_map']
+    new_id_name_map = params_id_to_name(model)
+    # load existing params, and initializing missing ones
+    model.load_state_dict(checkpoint['model_state_dict'], strict=False)
+    new_params = []
+    if args.residual == 'ResNetBasic' or args.residual == 'CifarResNetBasic':
+        reinit_pattern = '.*layer.*bn2\.((weight)|(bias))$'
+    elif args.residual == 'ResNetBottleneck':
+        reinit_pattern = '.*layer.*bn3\.((weight)|(bias))$'
+    else:
+        logger.fatal('Unknown --residual')
+        exit()
+    for n, p in model.named_parameters():
+        if n not in old_name_id_map and re.match(reinit_pattern, n):
+            logger.info('******> reinitializing param {} ...'.format(n))
+            new_params.append(p)
+            if args.initializer == 'zero':
+                logger.info('******> Initializing as zeros...')
+                p.data.zero_()
+            elif args.initializer == 'uniform':
+                logger.info('******> Initializing by uniform noises...')
+                p.data.uniform_(0.0, to=args.init_meta)
+            elif args.initializer == 'gaussian':
+                logger.info('******> Initializing by gaussian noises')
+                p.data.normal_(0.0, std=args.init_meta)
+            elif args.initializer == 'adam':
+                logger.info('******> Initializing by adam optimizer')
+            else:
+                logger.fatal('Unknown --initializer.')
+                exit()
+            switch_name = '.'.join(n.split('.')[:-2]+['switch.switch'])
+            logger.info('******> resetting buffer %s to 0.0 from %.3f' % (switch_name, model.state_dict()[switch_name]))
+            model.state_dict()[switch_name].zero_()
+
+    if len(new_params) and args.initializer == 'adam':
+        logger.info('******> Using adam to find a good initialization')
+        old_train_accu = checkpoint['train_accu']
+        local_optimizer = optim.Adam(new_params, lr=0.001, weight_decay=5e-4)
+        max_epoch = 10
+        founded = False
+        for e in range(max_epoch):
+            _, accu = train(e, model, local_optimizer)
+            if accu > old_train_accu - 0.5:
+                logger.info('******> Found a good initial position with training accuracy %.2f (vs. old %.2f) at epoch %d' % (
+                accu, old_train_accu, e))
+                founded = True
+                break
+        if not founded:
+            logger.info('******> failed to find a good initial position in %d epochs. Continue...' % max_epoch)
+
+
+    # load existing states, and insert missing states as empty dict
+    if not args.reset_states:
+        new_checkpoint = deepcopy(optimizer.state_dict())
+        old_checkpoint = checkpoint['optimizer_state_dict']
+        if len(old_checkpoint['param_groups']) != 1 or len(new_checkpoint['param_groups']) != 1:
+            logger.fatal('The number of param_groups is not 1.')
+            exit()
+        for new_id in new_checkpoint['param_groups'][0]['params']:
+            name = new_id_name_map[new_id]
+            if name in old_name_id_map:
+                logger.info('loading param {} state...'.format(name))
+                old_id = old_name_id_map[name]
+                new_checkpoint['state'][new_id] = old_checkpoint['state'][old_id]
+            else:
+                if new_id not in new_checkpoint['state']:
+                    logger.info('initializing param {} state as an empty dict...'.format(name))
+                    new_checkpoint['state'][new_id] = {}
+                else:
+                    logger.info('skipping param {} state (initial state exists)...'.format(name))
+        optimizer.load_state_dict(new_checkpoint)
+    # optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+    epoch = checkpoint['epoch']
+
+    return epoch
+
+def set_learning_rate(optimizer, lr):
+    """Sets the learning rate """
+    logger.info('\nSetting learning rate to %.6f' % lr)
+    for param_group in optimizer.param_groups:
+        param_group['lr'] = lr
+
+def decay_learning_rate(optimizer):
+    """Sets the learning rate to the initial LR decayed by 10"""
+    for param_group in optimizer.param_groups:
+        param_group['lr'] = param_group['lr'] * 0.1
+
+device = 'cuda' # if torch.cuda.is_available() else 'cpu'
+best_acc = 0  # best test accuracy
+start_epoch = 0  # start from epoch 0 or last checkpoint epoch
+
+save_path = os.path.join('./results', datetime.now().strftime('%Y-%m-%d_%H-%M-%S'))
+if not os.path.exists(save_path):
+    os.makedirs(save_path)
+else:
+    raise OSError('Directory {%s} exists. Use a new one.' % save_path)
+logging.basicConfig(filename=os.path.join(save_path, 'log.txt'), level=logging.INFO)
+logger = logging.getLogger('main')
+logger.addHandler(logging.StreamHandler())
+logger.info("Saving to %s", save_path)
+logger.info("Running arguments: %s", args)
+
+# Data
+logger.info('==> Preparing data..')
+transform_train = transforms.Compose([
+    transforms.RandomCrop(32, padding=4),
+    transforms.RandomHorizontalFlip(),
+    transforms.ToTensor(),
+    transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
+])
+
+transform_test = transforms.Compose([
+    transforms.ToTensor(),
+    transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
+])
+
+trainset = torchvision.datasets.CIFAR10(root='./data', train=True, download=True, transform=transform_train)
+trainloader = torch.utils.data.DataLoader(trainset, batch_size=args.batch_size, shuffle=True, num_workers=2)
+
+testset = torchvision.datasets.CIFAR10(root='./data', train=False, download=True, transform=transform_test)
+testloader = torch.utils.data.DataLoader(testset, batch_size=100, shuffle=False, num_workers=2)
+
+classes = ('plane', 'car', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck')
+
+# Model
+logger.info('==> Building model..')
+current_arch = list(map(int, args.net.split('-')))
+max_arch = [18]*len(current_arch)
+if len(current_arch) != len(max_arch):
+    logger.fatal('max_arch has different size.')
+    exit()
+growing_group = -1
+for cnt, v in enumerate(current_arch):
+    if v < max_arch[cnt]:
+        growing_group = cnt
+        break
+
+net = get_module(args.residual, current_arch)
+# net = VGG('VGG19')
+# net = ResNet18()
+# net = PreActResNet18()
+# net = GoogLeNet()
+# net = DenseNet121()
+# net = ResNeXt29_2x64d()
+# net = MobileNet()
+# net = MobileNetV2()
+# net = DPN92()
+# net = ShuffleNetG2()
+# net = SENet18()
+
+criterion = nn.CrossEntropyLoss()
+optimizer = get_optimizer(net)
+param_ema = utils.TorchExponentialMovingAverage()
+# Training
+def train(epoch, net, own_optimizer=None):
+    logger.info('\nTraining epoch %d @ %.1f sec' % (epoch, time.time()))
+    net.train()
+    train_loss = 0
+    correct = 0
+    total = 0
+    for batch_idx, (inputs, targets) in enumerate(trainloader):
+        inputs, targets = inputs.to(device), targets.to(device)
+        if own_optimizer is not None:
+            own_optimizer.zero_grad()
+        else:
+            optimizer.zero_grad()
+        outputs = net(inputs)
+        loss = criterion(outputs, targets)
+        loss.backward()
+        if own_optimizer is not None:
+            own_optimizer.step()
+        else:
+            optimizer.step()
+        # maintain a moving average
+        params_data_dict = {}
+        for n, p in net.named_parameters():
+            params_data_dict[n] = p.data
+        param_ema.push(params_data_dict)
+
+        train_loss += loss.item()
+        _, predicted = outputs.max(1)
+        total += targets.size(0)
+        correct += predicted.eq(targets).sum().item()
+        if 0 == batch_idx % 100 or batch_idx == len(trainloader) - 1:
+            logger.info('(%d/%d) ==> Loss: %.3f | Acc: %.3f%% (%d/%d)'
+                % (batch_idx+1, len(trainloader), train_loss/(batch_idx+1), 100.*correct/total, correct, total))
+    return train_loss / len(trainloader), 100.*correct/total
+
+def test(epoch, net, save=False):
+    logger.info('Testing epoch %d @ %.1f sec' % (epoch, time.time()))
+    global best_acc
+    net.eval()
+    test_loss = 0
+    correct = 0
+    total = 0
+    with torch.no_grad():
+        if args.ema_params:
+            logger.info('Using average params for test')
+            orig_params = utils.set_named_parameters(net, param_ema.average(), strict=False)
+        for batch_idx, (inputs, targets) in enumerate(testloader):
+            inputs, targets = inputs.to(device), targets.to(device)
+            outputs = net(inputs)
+            loss = criterion(outputs, targets)
+
+            test_loss += loss.item()
+            _, predicted = outputs.max(1)
+            total += targets.size(0)
+            correct += predicted.eq(targets).sum().item()
+            if 0 == batch_idx % 100 or batch_idx == len(testloader) - 1:
+                logger.info('(%d/%d) ==> Loss: %.3f | Acc: %.3f%% (%d/%d)'
+                    % (batch_idx+1, len(testloader), test_loss/(batch_idx+1), 100.*correct/total, correct, total))
+
+    # Save checkpoint.
+    acc = 100.*correct/total
+    global current_arch
+    if acc > best_acc and save:
+        logger.info('Saving best %.3f @ %d  ( resnet-%s )...' %(acc, epoch, list_to_str(current_arch)))
+        state = {
+            'net': net.state_dict(),
+            'acc': acc,
+            'epoch': epoch,
+        }
+        torch.save(state, os.path.join(save_path, 'best_ckpt.t7'))
+    best_acc = acc if acc > best_acc else best_acc
+
+    with torch.no_grad():
+        if args.ema_params:
+            utils.set_named_parameters(net, orig_params, strict=True)
+
+    return test_loss / len(testloader), acc
+
+# main func
+if args.growing_metric == 'max':
+    ema = utils.MovingMaximum()
+elif args.growing_metric == 'avg':
+    ema = utils.ExponentialMovingAverage(decay=0.95)
+else:
+    logger.fatal('Unknown --growing-metric')
+    exit()
+
+growed = False  # if growed in the recent interval
+
+def next_group(g, maxlim, arch):
+    if g < 0 or g >= len(maxlim):
+        logger.fatal('Wrong group index %d' % g)
+        exit()
+    for i in range(len(maxlim)):
+        idx = (g+i+1)%len(maxlim)
+        if maxlim[idx] > arch[idx]:
+            return idx
+    return -1
+
+def next_arch(mode, maxlim, arch, rate=0.333, group=0):
+    tmp_arch = [v for v in arch]
+    if 'all' == mode:
+        tmp_arch = [v+1 for v in tmp_arch]
+    elif 'group' == mode:
+        tmp_arch[group] += 1
+    elif 'rate' == mode:
+        num = int(round(sum(arch)*rate))
+        while num >= len(arch):
+            tmp_arch = [v + 1 for v in tmp_arch]
+            num -= len(arch)
+        if num:
+            rperm = np.random.permutation(len(arch))
+            for idx in rperm[:num]:
+                tmp_arch[idx] += 1
+    else:
+        logger.fatal('Unknown mode')
+        exit()
+
+    res = []
+    for r, m in zip(tmp_arch, maxlim):
+        if r > m:
+            res.append(m)
+        else:
+            res.append(r)
+    return res
+
+
+def can_grow(maxlim, arch):
+    for maxv, a in zip(maxlim, arch):
+        if maxv > a:
+            return True
+    return False
+
+num_tail_epochs = args.tail_epochs if args.optimizer == 'sgd' else 0
+last_epoch = -1
+growing_epochs = []
+intervals = (args.epochs - 1) // args.grow_interval + 1
+# epoch, train loss, train accu, test loss, test accu, timestamps
+curves = np.zeros((intervals*args.grow_interval + num_tail_epochs, 6))
+for interval in range(0, intervals):
+    # grow or stop
+    grow_check = interval > 0
+    if grow_check:  # check after every interval
+        delta_accu = ema.delta(-1 - args.grow_interval, -1)
+        logger.info(
+            '******> improved %.3f (ExponentialMovingAverage) in the last %d epochs' % (delta_accu, args.grow_interval))
+        if can_grow(max_arch, current_arch) and delta_accu < args.grow_threshold:
+            # save current model
+            save_ckpt = os.path.join(save_path, 'resnet-growing_ckpt.t7')
+            save_all(interval*args.grow_interval - 1, curves[interval*args.grow_interval - 1, 2], net, optimizer, save_ckpt)
+            # create a new net and optimizer
+            # current_arch[growing_group] += 1
+            current_arch = next_arch(args.growing_mode, max_arch, current_arch, rate=args.rate, group=growing_group)
+            logger.info('******> growing to resnet-%s before epoch %d' % (list_to_str(current_arch), interval*args.grow_interval))
+            net = get_module(args.residual, num_blocks=current_arch)
+            optimizer = get_optimizer(net)
+            loaded_epoch = load_all(net, optimizer, save_ckpt)
+            logger.info('testing new model ...')
+            test(loaded_epoch, net)
+            growed = True
+            growing_epochs.append(interval*args.grow_interval)
+        else:
+            growed = False
+
+    # training and testing
+    for epoch in range(interval*args.grow_interval, (interval+1)*args.grow_interval):
+        if 'sgd' == args.optimizer:
+            e = epoch % args.grow_interval
+            if e < args.grow_interval // 2:
+                set_learning_rate(optimizer, args.lr)
+            elif e < args.grow_interval * 3 // 4:
+                set_learning_rate(optimizer, args.lr * 0.1)
+            else:
+                set_learning_rate(optimizer, args.lr * 0.01)
+        curves[epoch, 0] = epoch
+        curves[epoch, 1], curves[epoch, 2] = train(epoch, net)
+        curves[epoch, 3], curves[epoch, 4] = test(epoch, net, save=True)
+        curves[epoch, 5] = time.time() / 60.0
+        ema.push(curves[epoch, 4])
+
+    if grow_check:  # check after every interval
+        delta_accu = ema.delta(-1 - args.grow_interval, -1)
+        if growed and delta_accu < args.grow_threshold: # just growed but no improvement
+            if args.growing_mode == 'group':
+                max_arch[growing_group] = current_arch[growing_group]
+                logger.info('******> stop growing group %d permanently. Limited as %s .' % (growing_group, list_to_str(max_arch)))
+            else:
+                max_arch[:] = current_arch[:]
+                logger.info('******> stop growing all permanently. Limited as %s .' % (list_to_str(max_arch)))
+        if growed:
+            if can_grow(max_arch, current_arch):
+                if args.growing_mode == 'group':
+                    growing_group = next_group(growing_group, max_arch, current_arch)
+            else:
+                logger.info('******> stop growing all groups')
+                last_epoch = (interval + 1) * args.grow_interval - 1
+                logger.info('******> reach limitation. Finished in advance @ epoch %d' % last_epoch)
+                curves = curves[:last_epoch+1+num_tail_epochs, :]
+                break
+    last_epoch = (interval + 1) * args.grow_interval - 1
+
+set_learning_rate(optimizer, args.lr * 0.1)
+for epoch in range(last_epoch + 1, last_epoch + 1 + num_tail_epochs):
+    if (epoch == last_epoch + 1) or (epoch == last_epoch + 1 + num_tail_epochs // 2):
+        logger.info('======> decaying learning rate')
+        decay_learning_rate(optimizer)
+    curves[epoch, 0] = epoch
+    curves[epoch, 1], curves[epoch, 2] = train(epoch, net)
+    curves[epoch, 3], curves[epoch, 4] = test(epoch, net, save=True)
+    curves[epoch, 5] = time.time() / 60.0
+    ema.push(curves[epoch, 4])
+
+# align time
+for e in range(curves.shape[0]):
+    curves[curves.shape[0]-1-e, 5] -= curves[0, 5]
+
+# plotting
+plot_segs = [0] + growing_epochs
+if len(growing_epochs) == 0 or growing_epochs[-1] != curves.shape[0]-1:
+    plot_segs = plot_segs + [curves.shape[0]-1]
+logger.info('growing epochs {}'.format(list_to_str(growing_epochs)))
+logger.info('curves: \n {}'.format(np.array_str(curves)))
+np.savetxt(os.path.join(save_path, 'curves.dat'), curves)
+clr1 = (0.5, 0., 0.)
+clr2 = (0.0, 0.5, 0.)
+fig, ax1 = plt.subplots()
+fig2, ax3 = plt.subplots()
+ax2 = ax1.twinx()
+ax4 = ax3.twinx()
+ax1.set_xlabel('epoch')
+ax1.set_ylabel('Loss', color=clr1)
+ax1.tick_params(axis='y', colors=clr1)
+ax2.set_ylabel('Accuracy (%)', color=clr2)
+ax2.tick_params(axis='y', colors=clr2)
+
+ax3.set_xlabel('time (mins)')
+ax3.set_ylabel('Loss', color=clr1)
+ax3.tick_params(axis='y', colors=clr1)
+ax4.set_ylabel('Accuracy (%)', color=clr2)
+ax4.tick_params(axis='y', colors=clr2)
+
+# ax2.set_ylim(80, 100) # no plot if enabled
+for idx in range(len(plot_segs)-1):
+    start = plot_segs[idx]
+    end = plot_segs[idx+1] + 1 if (plot_segs[idx+1] == curves.shape[0] - 1) else plot_segs[idx+1]
+    markersize = 12
+    coef = 2. if idx % 2 else 1.
+    if idx == len(plot_segs)-2:
+        ax1.semilogy(curves[start:end, 0], curves[start:end, 1], '--', color=[c*coef for c in clr1], markersize=markersize)
+        ax1.semilogy(curves[start:end, 0], curves[start:end, 3], '-', color=[c*coef for c in clr1], markersize=markersize)
+        ax2.plot(curves[start:end, 0], curves[start:end, 2], '--', color=[c*coef for c in clr2], markersize=markersize)
+        ax2.plot(curves[start:end, 0], curves[start:end, 4], '-', color=[c*coef for c in clr2], markersize=markersize)
+
+        ax3.semilogy(curves[start:end, 5], curves[start:end, 1], '--', color=[c * coef for c in clr1], markersize=markersize)
+        ax3.semilogy(curves[start:end, 5], curves[start:end, 3], '-', color=[c * coef for c in clr1], markersize=markersize)
+        ax4.plot(curves[start:end, 5], curves[start:end, 2], '--', color=[c * coef for c in clr2], markersize=markersize)
+        ax4.plot(curves[start:end, 5], curves[start:end, 4], '-', color=[c * coef for c in clr2], markersize=markersize)
+    else:
+        ax1.semilogy(curves[start:end, 0], curves[start:end, 1], '--', color=[c*coef for c in clr1], markersize=markersize, label='_nolegend_')
+        ax1.semilogy(curves[start:end, 0], curves[start:end, 3], '-', color=[c*coef for c in clr1], markersize=markersize, label='_nolegend_')
+        ax2.plot(curves[start:end, 0], curves[start:end, 2], '--', color=[c*coef for c in clr2], markersize=markersize, label='_nolegend_')
+        ax2.plot(curves[start:end, 0], curves[start:end, 4], '-', color=[c*coef for c in clr2], markersize=markersize, label='_nolegend_')
+
+        ax3.semilogy(curves[start:end, 5], curves[start:end, 1], '--', color=[c * coef for c in clr1], markersize=markersize, label='_nolegend_')
+        ax3.semilogy(curves[start:end, 5], curves[start:end, 3], '-', color=[c * coef for c in clr1], markersize=markersize, label='_nolegend_')
+        ax4.plot(curves[start:end, 5], curves[start:end, 2], '--', color=[c * coef for c in clr2], markersize=markersize, label='_nolegend_')
+        ax4.plot(curves[start:end, 5], curves[start:end, 4], '-', color=[c * coef for c in clr2], markersize=markersize, label='_nolegend_')
+
+ax2.plot(curves[:, 0], ema.get(), '-', color=[1.0, 0, 1.0])
+logger.info('Val accuracy moving average: \n {}'.format(np.array_str(np.array(ema.get()))))
+np.savetxt(os.path.join(save_path, 'ema.dat'), np.array(ema.get()))
+ax2.set_ylim(bottom=40, top=100)
+ax1.legend(('Train loss', 'Val loss'), loc='lower right')
+ax2.legend(('Train accuracy', 'Val accuracy', 'Val moving avg'), loc='lower left')
+fig.savefig(os.path.join(save_path, 'curves-vs-epochs.pdf'))
+
+ax4.plot(curves[:, 5], ema.get(), '-', color=[1.0, 0, 1.0])
+ax4.set_ylim(bottom=40, top=100)
+ax3.legend(('Train loss', 'Val loss'), loc='lower right')
+ax4.legend(('Train accuracy', 'Val accuracy', 'Val moving avg'), loc='lower left')
+fig2.savefig(os.path.join(save_path, 'curves-vs-time.pdf'))
+
+
+logger.info('Done!')
