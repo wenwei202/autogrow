@@ -18,6 +18,7 @@ import torch.backends.cudnn as cudnn
 import torchvision
 import torchvision.transforms as transforms
 import models.switch as ms
+import models.pswitch as ps
 
 import os
 import argparse
@@ -111,6 +112,11 @@ def print_switchs(model):
         if isinstance(m[1], ms.Switch):
             logger.info('******> switch {} is {}...'.format(m[0], m[1].get_switch()))
 
+def print_pswitchs(model):
+    for idx, m in enumerate(model.named_modules()):
+        if isinstance(m[1], ps.PSwitch):
+            logger.info('******> switch {} is {}...'.format(m[0], m[1].get_switch()))
+
 def increase_switchs(model):
     for idx, m in enumerate(model.named_modules()):
         if isinstance(m[1], ms.Switch):
@@ -156,7 +162,7 @@ def load_all(model, optimizer, path):
                 logger.fatal('Unknown --initializer.')
                 exit()
             switch_name = '.'.join(n.split('.')[:-2]+['switch.switch'])
-            logger.info('******> resetting buffer %s to 0.0 from %.3f' % (switch_name, model.state_dict()[switch_name]))
+            logger.info('******> resetting %s to 0.0 from %.3f' % (switch_name, model.state_dict()[switch_name]))
             model.state_dict()[switch_name].zero_()
 
     if len(new_params) and args.initializer == 'adam':
@@ -166,7 +172,7 @@ def load_all(model, optimizer, path):
         max_epoch = 10
         founded = False
         for e in range(max_epoch):
-            _, accu = train(e, model, local_optimizer, increase_switch=False)
+            _, accu = train(e, model, local_optimizer)
             if accu > old_train_accu - 0.5:
                 logger.info('******> Found a good initial position with training accuracy %.2f (vs. old %.2f) at epoch %d' % (
                 accu, old_train_accu, e))
@@ -289,6 +295,7 @@ def train(epoch, net, own_optimizer=None, increase_switch=False):
     train_loss = 0
     correct = 0
     total = 0
+    print_pswitchs(net)
     if increase_switch:
         increase_switchs(net)
     for batch_idx, (inputs, targets) in enumerate(trainloader):
@@ -448,9 +455,8 @@ for interval in range(0, intervals):
             else:
                 set_learning_rate(optimizer, args.lr * 0.01)
         curves[epoch, 0] = epoch
-        curves[epoch, 1], curves[epoch, 2] = train(epoch, net, increase_switch=True)
+        curves[epoch, 1], curves[epoch, 2] = train(epoch, net)
         curves[epoch, 3], curves[epoch, 4] = test(epoch, net, save=True)
-        print_switchs(net)
         curves[epoch, 5] = time.time() / 60.0
         ema.push(curves[epoch, 4])
 
@@ -484,9 +490,8 @@ for epoch in range(last_epoch + 1, last_epoch + 1 + num_tail_epochs):
         logger.info('======> decaying learning rate')
         decay_learning_rate(optimizer)
     curves[epoch, 0] = epoch
-    curves[epoch, 1], curves[epoch, 2] = train(epoch, net, increase_switch=True)
+    curves[epoch, 1], curves[epoch, 2] = train(epoch, net)
     curves[epoch, 3], curves[epoch, 4] = test(epoch, net, save=True)
-    print_switchs(net)
     curves[epoch, 5] = time.time() / 60.0
     ema.push(curves[epoch, 4])
 
