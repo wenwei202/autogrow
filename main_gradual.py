@@ -266,7 +266,7 @@ for cnt, v in enumerate(current_arch):
         growing_group = cnt
         break
 
-net = get_module(args.residual, len(trainloader) * args.grow_interval, current_arch)
+net = get_module(args.residual, args.grow_interval, current_arch)
 # net = VGG('VGG19')
 # net = ResNet18()
 # net = PreActResNet18()
@@ -289,9 +289,9 @@ def train(epoch, net, own_optimizer=None, increase_switch=False):
     train_loss = 0
     correct = 0
     total = 0
+    if increase_switch:
+        increase_switchs(net)
     for batch_idx, (inputs, targets) in enumerate(trainloader):
-        if increase_switch:
-            increase_switchs(net)
         inputs, targets = inputs.to(device), targets.to(device)
         if own_optimizer is not None:
             own_optimizer.zero_grad()
@@ -430,7 +430,7 @@ for interval in range(0, intervals):
         # create a new net and optimizer
         current_arch = next_arch(args.growing_mode, max_arch, current_arch, rate=args.rate, group=growing_group)
         logger.info('******> growing to resnet-%s before epoch %d' % (list_to_str(current_arch), interval*args.grow_interval))
-        net = get_module(args.residual, len(trainloader) * args.grow_interval, num_blocks=current_arch)
+        net = get_module(args.residual, args.grow_interval, num_blocks=current_arch)
         optimizer = get_optimizer(net)
         loaded_epoch = load_all(net, optimizer, save_ckpt)
         logger.info('testing new model ...')
