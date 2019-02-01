@@ -31,8 +31,8 @@ class Switch(nn.Module):
         if 'linear' == self.mode:
             self.switch += (self.stop - self.start) / self.steps
 
-        self.switch = self.start if self.switch < self.start else self.switch
-        self.switch = self.stop if self.switch > self.stop else self.switch
+        self.switch.fill_(self.start if self.switch < self.start else self.switch)
+        self.switch.fill_(self.stop if self.switch > self.stop else self.switch)
 
     def get_switch(self):
         return self.switch

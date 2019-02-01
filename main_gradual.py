@@ -59,12 +59,12 @@ def list_to_str(l):
         s += str(v) + '-'
     return s[:-1]
 
-def get_module(name, *_args, **keywords):
+def get_module(name, switch_steps, *_args, **keywords):
     net = getattr(models, name)(*_args, **keywords)
     net = net.to('cuda')
     net = torch.nn.DataParallel(net)
     cudnn.benchmark = True
-    configure_switch_policy(net, args.grow_interval)
+    configure_switch_policy(net, switch_steps)
     return net
 
 def get_optimizer(net):
@@ -114,7 +114,6 @@ def print_switchs(model):
 def increase_switchs(model):
     for idx, m in enumerate(model.named_modules()):
         if isinstance(m[1], ms.Switch):
-            logger.info('******> increasing switch {}...'.format(m[0]))
             m[1].increase()
 
 def configure_switch_policy(model, steps, start=0.0, stop=1.0, mode='linear'):
@@ -167,7 +166,7 @@ def load_all(model, optimizer, path):
         max_epoch = 10
         founded = False
         for e in range(max_epoch):
-            _, accu = train(e, model, local_optimizer)
+            _, accu = train(e, model, local_optimizer, increase_switch=False)
             if accu > old_train_accu - 0.5:
                 logger.info('******> Found a good initial position with training accuracy %.2f (vs. old %.2f) at epoch %d' % (
                 accu, old_train_accu, e))
@@ -267,7 +266,7 @@ for cnt, v in enumerate(current_arch):
         growing_group = cnt
         break
 
-net = get_module(args.residual, current_arch)
+net = get_module(args.residual, len(trainloader) * args.grow_interval, current_arch)
 # net = VGG('VGG19')
 # net = ResNet18()
 # net = PreActResNet18()
@@ -284,13 +283,15 @@ criterion = nn.CrossEntropyLoss()
 optimizer = get_optimizer(net)
 param_ema = utils.TorchExponentialMovingAverage()
 # Training
-def train(epoch, net, own_optimizer=None):
+def train(epoch, net, own_optimizer=None, increase_switch=False):
     logger.info('\nTraining epoch %d @ %.1f sec' % (epoch, time.time()))
     net.train()
     train_loss = 0
     correct = 0
     total = 0
     for batch_idx, (inputs, targets) in enumerate(trainloader):
+        if increase_switch:
+            increase_switchs(net)
         inputs, targets = inputs.to(device), targets.to(device)
         if own_optimizer is not None:
             own_optimizer.zero_grad()
@@ -429,7 +430,7 @@ for interval in range(0, intervals):
         # create a new net and optimizer
         current_arch = next_arch(args.growing_mode, max_arch, current_arch, rate=args.rate, group=growing_group)
         logger.info('******> growing to resnet-%s before epoch %d' % (list_to_str(current_arch), interval*args.grow_interval))
-        net = get_module(args.residual, num_blocks=current_arch)
+        net = get_module(args.residual, len(trainloader) * args.grow_interval, num_blocks=current_arch)
         optimizer = get_optimizer(net)
         loaded_epoch = load_all(net, optimizer, save_ckpt)
         logger.info('testing new model ...')
@@ -447,8 +448,9 @@ for interval in range(0, intervals):
             else:
                 set_learning_rate(optimizer, args.lr * 0.01)
         curves[epoch, 0] = epoch
-        curves[epoch, 1], curves[epoch, 2] = train(epoch, net)
+        curves[epoch, 1], curves[epoch, 2] = train(epoch, net, increase_switch=True)
         curves[epoch, 3], curves[epoch, 4] = test(epoch, net, save=True)
+        print_switchs(net)
         curves[epoch, 5] = time.time() / 60.0
         ema.push(curves[epoch, 4])
 
@@ -482,8 +484,9 @@ for epoch in range(last_epoch + 1, last_epoch + 1 + num_tail_epochs):
         logger.info('======> decaying learning rate')
         decay_learning_rate(optimizer)
     curves[epoch, 0] = epoch
-    curves[epoch, 1], curves[epoch, 2] = train(epoch, net)
+    curves[epoch, 1], curves[epoch, 2] = train(epoch, net, increase_switch=True)
     curves[epoch, 3], curves[epoch, 4] = test(epoch, net, save=True)
+    print_switchs(net)
     curves[epoch, 5] = time.time() / 60.0
     ema.push(curves[epoch, 4])
 
