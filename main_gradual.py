@@ -35,7 +35,7 @@ parser.add_argument('--lr', default=0.1, type=float, help='learning rate')
 parser.add_argument('--epochs', default=4000, type=int, help='the number of epochs')
 parser.add_argument('--grow-threshold', '--gt', default=0.1, type=float, help='the accuracy threshold to grow or stop')
 parser.add_argument('--ema-params', '--ep', action='store_true', help='validating accuracy by a exponentially moving average of parameters')
-parser.add_argument('--growing-mode', default='all', type=str, help='how new structures are added (rate, all, group)')
+parser.add_argument('--growing-mode', default='all', type=str, help='how new structures are added (rate, all, sub, group)')
 
 parser.add_argument('--rate', default=0.4, type=float, help='the rate to grow when --growing-mode=rate')
 parser.add_argument('--grow-interval', '--gi', default=100, type=int, help='an interval (in epochs) to grow new structures')
@@ -43,7 +43,8 @@ parser.add_argument('--stop-interval', '--si', default=300, type=int, help='an i
 parser.add_argument('--net', default='2-2-2', type=str, help='starting net')
 parser.add_argument('--sub-net', default='1-1-1', type=str, help='a sub net to grow')
 parser.add_argument('--max-net', default='36-36-36', type=str, help='The maximum net')
-parser.add_argument('--residual', default='CifarResNetBasic', type=str, help='the type of residual block (ResNetBasic or ResNetBottleneck or CifarResNetBasic)')
+parser.add_argument('--residual', default='CifarResNetBasic', type=str,
+                    help='the type of residual block (CifarSwitchResNetBasic, ResNetBasic or ResNetBottleneck or CifarResNetBasic)')
 parser.add_argument('--initializer', '--init', default='gaussian', type=str, help='initializers of new structures (zero, uniform, gaussian, adam)')
 
 parser.add_argument('--growing-metric', default='max', type=str, help='the metric for growing (max or avg)')
