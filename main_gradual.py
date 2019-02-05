@@ -40,14 +40,16 @@ parser.add_argument('--growing-mode', default='all', type=str, help='how new str
 parser.add_argument('--rate', default=0.4, type=float, help='the rate to grow when --growing-mode=rate')
 parser.add_argument('--grow-interval', '--gi', default=100, type=int, help='an interval (in epochs) to grow new structures')
 parser.add_argument('--stop-interval', '--si', default=300, type=int, help='an interval (in epochs) to grow new structures')
-parser.add_argument('--net', default='1-1-1', type=str, help='starting net')
+parser.add_argument('--net', default='2-2-2', type=str, help='starting net')
+parser.add_argument('--sub-net', default='1-1-1', type=str, help='a sub net to grow')
+parser.add_argument('--max-net', default='36-36-36', type=str, help='The maximum net')
 parser.add_argument('--residual', default='CifarResNetBasic', type=str, help='the type of residual block (ResNetBasic or ResNetBottleneck or CifarResNetBasic)')
 parser.add_argument('--initializer', '--init', default='gaussian', type=str, help='initializers of new structures (zero, uniform, gaussian, adam)')
 
 parser.add_argument('--growing-metric', default='max', type=str, help='the metric for growing (max or avg)')
 parser.add_argument('--reset-states', '--rs', action='store_true', help='reset optimizer states or not (such as momentum)')
 parser.add_argument('--init-meta', default=1.0, type=float, help='a meta parameter for initializer')
-parser.add_argument('--tail-epochs', '--te', default=100, type=int, help='the number of epochs after growing epochs (--epochs) for sgd or sgdc optimizer')
+parser.add_argument('--tail-epochs', '--te', default=0, type=int, help='the number of epochs after growing epochs (--epochs)')
 parser.add_argument('--batch-size', '--bz', default=128, type=int, help='batch size')
 parser.add_argument('--resume', '-r', action='store_true', help='resume from checkpoint')
 
@@ -262,7 +264,8 @@ classes = ('plane', 'car', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship'
 # Model
 logger.info('==> Building model..')
 current_arch = list(map(int, args.net.split('-')))
-max_arch = [18]*len(current_arch)
+subnet_arch = list(map(int, args.sub_net.split('-')))
+max_arch = list(map(int, args.max_net.split('-')))
 if len(current_arch) != len(max_arch):
     logger.fatal('max_arch has different size.')
     exit()
@@ -378,43 +381,6 @@ else:
     logger.fatal('Unknown --growing-metric')
     exit()
 
-def next_group(g, maxlim, arch):
-    if g < 0 or g >= len(maxlim):
-        logger.fatal('Wrong group index %d' % g)
-        exit()
-    for i in range(len(maxlim)):
-        idx = (g+i+1)%len(maxlim)
-        if maxlim[idx] > arch[idx]:
-            return idx
-    return -1
-
-def next_arch(mode, maxlim, arch, rate=0.333, group=0):
-    tmp_arch = [v for v in arch]
-    if 'all' == mode:
-        tmp_arch = [v+1 for v in tmp_arch]
-    elif 'group' == mode:
-        tmp_arch[group] += 1
-    elif 'rate' == mode:
-        num = int(round(sum(arch)*rate))
-        while num >= len(arch):
-            tmp_arch = [v + 1 for v in tmp_arch]
-            num -= len(arch)
-        if num:
-            rperm = np.random.permutation(len(arch))
-            for idx in rperm[:num]:
-                tmp_arch[idx] += 1
-    else:
-        logger.fatal('Unknown mode')
-        exit()
-
-    res = []
-    for r, m in zip(tmp_arch, maxlim):
-        if r > m:
-            res.append(m)
-        else:
-            res.append(r)
-    return res
-
 
 def can_grow(maxlim, arch):
     for maxv, a in zip(maxlim, arch):
@@ -422,28 +388,13 @@ def can_grow(maxlim, arch):
             return True
     return False
 
-num_tail_epochs = args.tail_epochs if (args.optimizer == 'sgd' or args.optimizer == 'sgdc') else 0
+num_tail_epochs = args.tail_epochs # if (args.optimizer == 'sgd' or args.optimizer == 'sgdc') else 0
 last_epoch = -1
 growing_epochs = []
 intervals = (args.epochs - 1) // args.grow_interval + 1
 # epoch, train loss, train accu, test loss, test accu, timestamps
 curves = np.zeros((intervals*args.grow_interval + num_tail_epochs, 6))
 for interval in range(0, intervals):
-    # grow
-    if can_grow(max_arch, current_arch): # and delta_accu < args.grow_threshold:
-        # save current model
-        save_ckpt = os.path.join(save_path, 'resnet-growing_ckpt.t7')
-        save_all(interval*args.grow_interval - 1, curves[interval*args.grow_interval - 1, 2], net, optimizer, save_ckpt)
-        # create a new net and optimizer
-        current_arch = next_arch(args.growing_mode, max_arch, current_arch, rate=args.rate, group=growing_group)
-        logger.info('******> growing to resnet-%s before epoch %d' % (list_to_str(current_arch), interval*args.grow_interval))
-        net = get_module(args.residual, args.grow_interval, num_blocks=current_arch)
-        optimizer = get_optimizer(net)
-        loaded_epoch = load_all(net, optimizer, save_ckpt)
-        logger.info('testing new model ...')
-        test(loaded_epoch, net)
-        growing_epochs.append(interval*args.grow_interval)
-
     # training and testing
     for epoch in range(interval*args.grow_interval, (interval+1)*args.grow_interval):
         if 'sgdc' == args.optimizer:
@@ -460,8 +411,9 @@ for interval in range(0, intervals):
         curves[epoch, 5] = time.time() / 60.0
         ema.push(curves[epoch, 4])
 
-    # limit max arch and stop
-    logger.info('******> improved %.3f (ExponentialMovingAverage) in the last %d epochs' % (ema.delta(-1 - args.grow_interval, -1), args.grow_interval))
+    # limit max arch
+    logger.info('******> improved %.3f (ExponentialMovingAverage) in the last %d epochs' % (
+        ema.delta(-1 - args.grow_interval, -1), args.grow_interval))
     delta_accu = ema.delta(-1 - args.stop_interval, -1)
     logger.info(
         '******> improved %.3f (ExponentialMovingAverage) in the last %d epochs' % (delta_accu, args.stop_interval))
@@ -474,8 +426,26 @@ for interval in range(0, intervals):
             logger.info('******> stop growing all permanently. Limited as %s .' % (list_to_str(max_arch)))
 
     if can_grow(max_arch, current_arch):
+        # save current model
+        save_ckpt = os.path.join(save_path, 'resnet-growing_ckpt.t7')
+        save_all((interval + 1) * args.grow_interval - 1,
+                 curves[(interval + 1) * args.grow_interval - 1, 2],
+                 net,
+                 optimizer,
+                 save_ckpt)
+        # create a new net and optimizer
+        current_arch = utils.next_arch(args.growing_mode, max_arch, current_arch, logger, sub=subnet_arch,
+                                       rate=args.rate, group=growing_group)
+        logger.info(
+            '******> growing to resnet-%s before epoch %d' % (list_to_str(current_arch), (interval + 1) * args.grow_interval))
+        net = get_module(args.residual, args.grow_interval, num_blocks=current_arch)
+        optimizer = get_optimizer(net)
+        loaded_epoch = load_all(net, optimizer, save_ckpt)
+        logger.info('testing new model ...')
+        test(loaded_epoch, net)
+        growing_epochs.append((interval + 1) * args.grow_interval)
         if args.growing_mode == 'group':
-            growing_group = next_group(growing_group, max_arch, current_arch)
+            growing_group = utils.next_group(growing_group, max_arch, current_arch, logger)
     else:
         logger.info('******> stop growing all groups')
         last_epoch = (interval + 1) * args.grow_interval - 1
@@ -486,7 +456,8 @@ for interval in range(0, intervals):
 
 set_learning_rate(optimizer, args.lr)
 for epoch in range(last_epoch + 1, last_epoch + 1 + num_tail_epochs):
-    if (epoch == last_epoch + 1) or (epoch == last_epoch + 1 + num_tail_epochs // 2):
+    if ((epoch == last_epoch + 1 + num_tail_epochs // 2) or (epoch == last_epoch + 1 + num_tail_epochs * 3 // 4)) and (
+            args.optimizer == 'sgd' or args.optimizer == 'sgdc'):
         logger.info('======> decaying learning rate')
         decay_learning_rate(optimizer)
     curves[epoch, 0] = epoch

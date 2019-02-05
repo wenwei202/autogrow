@@ -9,6 +9,7 @@ import time
 import math
 import torch
 import copy
+import numpy as np
 
 import torch.nn as nn
 import torch.nn.init as init
@@ -96,3 +97,43 @@ def set_named_parameters(net, named_params, strict=True):
             p.data.copy_(named_params[n])
 
     return orig_params_data
+
+def next_group(g, maxlim, arch, logger):
+    if g < 0 or g >= len(maxlim):
+        logger.info('group index %d is out of range.' % g)
+        return -1
+    for i in range(len(maxlim)):
+        idx = (g+i+1)%len(maxlim)
+        if maxlim[idx] > arch[idx]:
+            return idx
+    return -1
+
+def next_arch(mode, maxlim, arch, logger, sub=None, rate=0.333, group=0):
+    tmp_arch = [v for v in arch]
+    if 'all' == mode:
+        tmp_arch = [v+1 for v in tmp_arch]
+    elif 'group' == mode and group >= 0 and group < len(arch):
+        tmp_arch[group] += 1
+    elif 'rate' == mode:
+        num = int(round(sum(arch)*rate))
+        while num >= len(arch):
+            tmp_arch = [v + 1 for v in tmp_arch]
+            num -= len(arch)
+        if num:
+            rperm = np.random.permutation(len(arch))
+            for idx in rperm[:num]:
+                tmp_arch[idx] += 1
+    elif 'sub' == mode and (sub is not None):
+        for idx, val in enumerate(tmp_arch):
+            tmp_arch[idx] += sub[idx]
+    else:
+        logger.fatal('Unknown mode')
+        exit()
+
+    res = []
+    for r, m in zip(tmp_arch, maxlim):
+        if r > m:
+            res.append(m)
+        else:
+            res.append(r)
+    return res

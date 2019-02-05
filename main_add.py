@@ -227,7 +227,7 @@ classes = ('plane', 'car', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship'
 # Model
 logger.info('==> Building model..')
 current_arch = list(map(int, args.net.split('-')))
-max_arch = [18]*len(current_arch)
+max_arch = [36]*len(current_arch)
 if len(current_arch) != len(max_arch):
     logger.fatal('max_arch has different size.')
     exit()
@@ -342,43 +342,6 @@ else:
 
 growed = False  # if growed in the recent interval
 
-def next_group(g, maxlim, arch):
-    if g < 0 or g >= len(maxlim):
-        logger.fatal('Wrong group index %d' % g)
-        exit()
-    for i in range(len(maxlim)):
-        idx = (g+i+1)%len(maxlim)
-        if maxlim[idx] > arch[idx]:
-            return idx
-    return -1
-
-def next_arch(mode, maxlim, arch, rate=0.333, group=0):
-    tmp_arch = [v for v in arch]
-    if 'all' == mode:
-        tmp_arch = [v+1 for v in tmp_arch]
-    elif 'group' == mode:
-        tmp_arch[group] += 1
-    elif 'rate' == mode:
-        num = int(round(sum(arch)*rate))
-        while num >= len(arch):
-            tmp_arch = [v + 1 for v in tmp_arch]
-            num -= len(arch)
-        if num:
-            rperm = np.random.permutation(len(arch))
-            for idx in rperm[:num]:
-                tmp_arch[idx] += 1
-    else:
-        logger.fatal('Unknown mode')
-        exit()
-
-    res = []
-    for r, m in zip(tmp_arch, maxlim):
-        if r > m:
-            res.append(m)
-        else:
-            res.append(r)
-    return res
-
 
 def can_grow(maxlim, arch):
     for maxv, a in zip(maxlim, arch):
@@ -405,7 +368,7 @@ for interval in range(0, intervals):
             save_all(interval*args.grow_interval - 1, curves[interval*args.grow_interval - 1, 2], net, optimizer, save_ckpt)
             # create a new net and optimizer
             # current_arch[growing_group] += 1
-            current_arch = next_arch(args.growing_mode, max_arch, current_arch, rate=args.rate, group=growing_group)
+            current_arch = utils.next_arch(args.growing_mode, max_arch, current_arch, logger, rate=args.rate, group=growing_group)
             logger.info('******> growing to resnet-%s before epoch %d' % (list_to_str(current_arch), interval*args.grow_interval))
             net = get_module(args.residual, num_blocks=current_arch)
             optimizer = get_optimizer(net)
@@ -445,7 +408,7 @@ for interval in range(0, intervals):
         if growed:
             if can_grow(max_arch, current_arch):
                 if args.growing_mode == 'group':
-                    growing_group = next_group(growing_group, max_arch, current_arch)
+                    growing_group = utils.next_group(growing_group, max_arch, current_arch, logger)
             else:
                 logger.info('******> stop growing all groups')
                 last_epoch = (interval + 1) * args.grow_interval - 1
