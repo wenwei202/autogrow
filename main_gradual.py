@@ -139,7 +139,7 @@ def load_all(model, optimizer, path):
     # load existing params, and initializing missing ones
     model.load_state_dict(checkpoint['model_state_dict'], strict=False)
     new_params = []
-    if args.residual == 'ResNetBasic' or args.residual == 'CifarResNetBasic':
+    if args.residual == 'ResNetBasic' or args.residual == 'CifarResNetBasic' or args.residual == 'CifarSwitchResNetBasic' :
         reinit_pattern = '.*layer.*bn2\.((weight)|(bias))$'
     elif args.residual == 'ResNetBottleneck':
         reinit_pattern = '.*layer.*bn3\.((weight)|(bias))$'
@@ -165,8 +165,9 @@ def load_all(model, optimizer, path):
                 logger.fatal('Unknown --initializer.')
                 exit()
             switch_name = '.'.join(n.split('.')[:-2]+['switch.switch'])
-            logger.info('******> resetting %s to 0.0 from %.3f' % (switch_name, model.state_dict()[switch_name]))
-            model.state_dict()[switch_name].zero_()
+            if switch_name in model.state_dict():
+                logger.info('******> resetting %s to 0.0 from %.3f' % (switch_name, model.state_dict()[switch_name]))
+                model.state_dict()[switch_name].zero_()
 
     if len(new_params) and args.initializer == 'adam':
         logger.info('******> Using adam to find a good initialization')
