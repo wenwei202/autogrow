@@ -36,6 +36,8 @@ parser.add_argument('--epochs', default=4000, type=int, help='the number of epoc
 parser.add_argument('--grow-threshold', '--gt', default=0.1, type=float, help='the accuracy threshold to grow or stop')
 parser.add_argument('--ema-params', '--ep', action='store_true', help='validating accuracy by a exponentially moving average of parameters')
 parser.add_argument('--growing-mode', default='all', type=str, help='how new structures are added (rate, all, sub, group)')
+parser.add_argument('--tail-epochs', '--te', default=0, type=int, help='the number of epochs after growing epochs (--epochs)')
+parser.add_argument('--switch-off', '--so', action='store_true', help='switch off at initialization')
 
 parser.add_argument('--rate', default=0.4, type=float, help='the rate to grow when --growing-mode=rate')
 parser.add_argument('--grow-interval', '--gi', default=100, type=int, help='an interval (in epochs) to grow new structures')
@@ -50,7 +52,6 @@ parser.add_argument('--initializer', '--init', default='gaussian', type=str, hel
 parser.add_argument('--growing-metric', default='max', type=str, help='the metric for growing (max or avg)')
 parser.add_argument('--reset-states', '--rs', action='store_true', help='reset optimizer states or not (such as momentum)')
 parser.add_argument('--init-meta', default=1.0, type=float, help='a meta parameter for initializer')
-parser.add_argument('--tail-epochs', '--te', default=0, type=int, help='the number of epochs after growing epochs (--epochs)')
 parser.add_argument('--batch-size', '--bz', default=128, type=int, help='batch size')
 parser.add_argument('--resume', '-r', action='store_true', help='resume from checkpoint')
 
@@ -164,10 +165,11 @@ def load_all(model, optimizer, path):
             else:
                 logger.fatal('Unknown --initializer.')
                 exit()
-            switch_name = '.'.join(n.split('.')[:-2]+['switch.switch'])
-            if switch_name in model.state_dict():
-                logger.info('******> resetting %s to 0.0 from %.3f' % (switch_name, model.state_dict()[switch_name]))
-                model.state_dict()[switch_name].zero_()
+            if args.switch_off:
+                switch_name = '.'.join(n.split('.')[:-2]+['switch.switch'])
+                if switch_name in model.state_dict():
+                    logger.info('******> resetting %s to 0.0 from %.3f' % (switch_name, model.state_dict()[switch_name]))
+                    model.state_dict()[switch_name].zero_()
 
     if len(new_params) and args.initializer == 'adam':
         logger.info('******> Using adam to find a good initialization')
