@@ -28,33 +28,34 @@ import utils
 import time
 
 # from models import *
-
 parser = argparse.ArgumentParser(description='PyTorch CIFAR10 Training')
 parser.add_argument('--optimizer', '--opt', default='sgd', type=str, help='sgd variants (sgdc, sgd, adam, amsgrad, adagrad, adadelta, rmsprop)')
 parser.add_argument('--lr', default=0.1, type=float, help='learning rate')
+parser.add_argument('--switch-reg', '--sr', default=None, type=float, help='lambda of L1 regularization on pswitch')
 parser.add_argument('--epochs', default=4000, type=int, help='the number of epochs')
 parser.add_argument('--grow-threshold', '--gt', default=0.1, type=float, help='the accuracy threshold to grow or stop')
 parser.add_argument('--ema-params', '--ep', action='store_true', help='validating accuracy by a exponentially moving average of parameters')
 parser.add_argument('--growing-mode', default='all', type=str, help='how new structures are added (rate, all, sub, group)')
 parser.add_argument('--tail-epochs', '--te', default=0, type=int, help='the number of epochs after growing epochs (--epochs)')
-parser.add_argument('--switch-off', '--so', action='store_true', help='switch off at initialization')
+parser.add_argument('--pswitch-thre', '--pt', default=0.005, type=float, help='threshold to zero pswitchs')
 
-parser.add_argument('--rate', default=0.4, type=float, help='the rate to grow when --growing-mode=rate')
+parser.add_argument('--switch-off', '--so', action='store_true', help='switch off at initialization')
 parser.add_argument('--grow-interval', '--gi', default=100, type=int, help='an interval (in epochs) to grow new structures')
 parser.add_argument('--stop-interval', '--si', default=300, type=int, help='an interval (in epochs) to grow new structures')
 parser.add_argument('--net', default='2-2-2', type=str, help='starting net')
 parser.add_argument('--sub-net', default='1-1-1', type=str, help='a sub net to grow')
-parser.add_argument('--max-net', default='36-36-36', type=str, help='The maximum net')
+parser.add_argument('--max-net', default='96-96-96', type=str, help='The maximum net')
 parser.add_argument('--residual', default='CifarResNetBasic', type=str,
                     help='the type of residual block (CifarSwitchResNetBasic, ResNetBasic or ResNetBottleneck or CifarResNetBasic)')
 parser.add_argument('--initializer', '--init', default='gaussian', type=str, help='initializers of new structures (zero, uniform, gaussian, adam)')
 
+parser.add_argument('--rate', default=0.4, type=float, help='the rate to grow when --growing-mode=rate')
 parser.add_argument('--growing-metric', default='max', type=str, help='the metric for growing (max or avg)')
 parser.add_argument('--reset-states', '--rs', action='store_true', help='reset optimizer states or not (such as momentum)')
 parser.add_argument('--init-meta', default=1.0, type=float, help='a meta parameter for initializer')
 parser.add_argument('--batch-size', '--bz', default=128, type=int, help='batch size')
-parser.add_argument('--resume', '-r', action='store_true', help='resume from checkpoint')
-
+parser.add_argument('--evaluate', default='', type=str, metavar='PATH',
+                    help='path to checkpoint (default: none)')
 args = parser.parse_args()
 
 def list_to_str(l):
@@ -110,6 +111,28 @@ def save_all(epoch, train_accu, model, optimizer, path):
         'optimizer_state_dict': optimizer.state_dict(),
         'name_id_map': params_name_to_id(model),
     }, path)
+
+def zerout_pswitchs(model, threshold=0.0001, log=False):
+    total = 0
+    zeroed = 0
+    for idx, m in enumerate(model.named_modules()):
+        if isinstance(m[1], ps.PSwitch):
+            total += 1
+            # logger.info('******> switch {} is {}...'.format(m[0], m[1].get_switch()))
+            if m[1].switch.data.abs() < threshold:
+                if log:
+                    logger.info('******> switch {} is zeroed out...'.format(m[0]))
+                m[1].switch.data.fill_(0.0)
+                zeroed += 1
+    if log:
+        logger.info('%d/%d zeroed out' % (zeroed, total))
+
+def reg_pswitchs(model):
+    reg = 0.0
+    for idx, m in enumerate(model.named_modules()):
+        if isinstance(m[1], ps.PSwitch):
+            reg += m[1].switch.norm(p=1)
+    return reg * args.switch_reg
 
 def print_switchs(model):
     for idx, m in enumerate(model.named_modules()):
@@ -313,16 +336,26 @@ def train(epoch, net, own_optimizer=None, increase_switch=False):
             optimizer.zero_grad()
         outputs = net(inputs)
         loss = criterion(outputs, targets)
-        loss.backward()
+        total_cost = loss
+        sreg = 0.0
+        if args.switch_reg is not None:
+            sreg = reg_pswitchs(net)
+            total_cost += sreg
+        total_cost.backward()
         if own_optimizer is not None:
             own_optimizer.step()
         else:
             optimizer.step()
+
+        if args.switch_reg is not None:
+            zerout_pswitchs(net, args.pswitch_thre)
+
         # maintain a moving average
-        params_data_dict = {}
-        for n, p in net.named_parameters():
-            params_data_dict[n] = p.data
-        param_ema.push(params_data_dict)
+        if args.ema_params:
+            params_data_dict = {}
+            for n, p in net.named_parameters():
+                params_data_dict[n] = p.data
+            param_ema.push(params_data_dict)
 
         train_loss += loss.item()
         _, predicted = outputs.max(1)
@@ -331,6 +364,8 @@ def train(epoch, net, own_optimizer=None, increase_switch=False):
         if 0 == batch_idx % 100 or batch_idx == len(trainloader) - 1:
             logger.info('(%d/%d) ==> Loss: %.3f | Acc: %.3f%% (%d/%d)'
                 % (batch_idx+1, len(trainloader), train_loss/(batch_idx+1), 100.*correct/total, correct, total))
+            if args.switch_reg is not None:
+                logger.info('        ==> PSwitch L1 Reg.: %.6f ' % sreg)
     return train_loss / len(trainloader), 100.*correct/total
 
 def test(epoch, net, save=False):
@@ -377,6 +412,25 @@ def test(epoch, net, save=False):
     return test_loss / len(testloader), acc
 
 # main func
+
+# resume and evaluate from a checkpoint
+if args.evaluate:
+    if os.path.isfile(args.evaluate):
+        # load existing params, and initializing missing ones
+        print("=> loading checkpoint '{}'".format(args.evaluate))
+        checkpoint = torch.load(args.evaluate)
+        net.load_state_dict(checkpoint['net'])
+        print("=> loaded checkpoint '{}' (epoch {})"
+              .format(args.evaluate, checkpoint['epoch']))
+        print_pswitchs(net)
+        logger.info('zeroing out small pswitchs...')
+        zerout_pswitchs(net, args.pswitch_thre, log=True)
+        test(checkpoint['epoch'], net)
+        logger.info('evaluation done!')
+    else:
+        print("=> no checkpoint found at '{}'".format(args.evaluate))
+    exit()
+
 if args.growing_metric == 'max':
     ema = utils.MovingMaximum()
 elif args.growing_metric == 'avg':
