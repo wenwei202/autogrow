@@ -40,6 +40,7 @@ parser.add_argument('--growing-mode', default='group', type=str, help='how new s
 parser.add_argument('--tail-epochs', '--te', default=60, type=int, help='the number of epochs after growing epochs (--epochs)')
 parser.add_argument('--pswitch-thre', '--pt', default=0.005, type=float, help='threshold to zero pswitchs')
 
+parser.add_argument('--batch-size', '--bz', default=256, type=int, help='batch size')
 parser.add_argument('--switch-off', '--so', action='store_true', help='switch off at initialization')
 parser.add_argument('--grow-interval', '--gi', default=1, type=int, help='an interval (in epochs) to grow new structures')
 parser.add_argument('--stop-interval', '--si', default=30, type=int, help='an interval (in epochs) to grow new structures')
@@ -54,7 +55,6 @@ parser.add_argument('--rate', default=0.4, type=float, help='the rate to grow wh
 parser.add_argument('--growing-metric', default='max', type=str, help='the metric for growing (max or avg)')
 parser.add_argument('--reset-states', '--rs', action='store_true', help='reset optimizer states or not (such as momentum)')
 parser.add_argument('--init-meta', default=1.0, type=float, help='a meta parameter for initializer')
-parser.add_argument('--batch-size', '--bz', default=256, type=int, help='batch size')
 parser.add_argument('--evaluate', default='', type=str, metavar='PATH',
                     help='path to checkpoint (default: none)')
 parser.add_argument('--data', default='./imagenet', type=str, metavar='PATH',
@@ -602,7 +602,7 @@ ax2.legend(('Train accuracy', 'Val accuracy', 'Val max'), loc='lower left')
 fig.savefig(os.path.join(save_path, 'curves-vs-epochs.pdf'))
 
 ax4.plot(curves[:, 5], ema.get(), '-', color=[1.0, 0, 1.0])
-ax4.set_ylim(bottom=40, top=100)
+ax4.set_ylim(bottom=20, top=85)
 ax3.legend(('Train loss', 'Val loss'), loc='lower right')
 ax4.legend(('Train accuracy', 'Val accuracy', 'Val moving avg'), loc='lower left')
 fig2.savefig(os.path.join(save_path, 'curves-vs-time.pdf'))
