@@ -37,7 +37,7 @@ parser.add_argument('--epochs', default=1000, type=int, help='the number of epoc
 parser.add_argument('--grow-threshold', '--gt', default=0.05, type=float, help='the accuracy threshold to grow or stop')
 parser.add_argument('--ema-params', '--ep', action='store_true', help='validating accuracy by a exponentially moving average of parameters')
 parser.add_argument('--growing-mode', default='group', type=str, help='how new structures are added (rate, all, sub, group)')
-parser.add_argument('--tail-epochs', '--te', default=60, type=int, help='the number of epochs after growing epochs (--epochs)')
+parser.add_argument('--tail-epochs', '--te', default=90, type=int, help='the number of epochs after growing epochs (--epochs)')
 parser.add_argument('--pswitch-thre', '--pt', default=0.005, type=float, help='threshold to zero pswitchs')
 
 parser.add_argument('--batch-size', '--bz', default=256, type=int, help='batch size')
@@ -470,9 +470,9 @@ for interval in range(0, intervals):
     for epoch in range(interval*args.grow_interval, (interval+1)*args.grow_interval):
         if 'sgdc' == args.optimizer:
             e = epoch % args.grow_interval
-            if e < args.grow_interval // 2:
+            if e < args.grow_interval // 3:
                 set_learning_rate(optimizer, args.lr)
-            elif e < args.grow_interval * 3 // 4:
+            elif e < args.grow_interval * 2 // 3:
                 set_learning_rate(optimizer, args.lr * 0.1)
             else:
                 set_learning_rate(optimizer, args.lr * 0.01)
@@ -527,7 +527,7 @@ for interval in range(0, intervals):
 
 set_learning_rate(optimizer, args.lr)
 for epoch in range(last_epoch + 1, last_epoch + 1 + num_tail_epochs):
-    if ((epoch == last_epoch + 1 + num_tail_epochs // 2) or (epoch == last_epoch + 1 + num_tail_epochs * 3 // 4)) and (
+    if ((epoch == last_epoch + 1 + num_tail_epochs // 3) or (epoch == last_epoch + 1 + num_tail_epochs * 2 // 3)) and (
             args.optimizer == 'sgd' or args.optimizer == 'sgdc'):
         logger.info('======> decaying learning rate')
         decay_learning_rate(optimizer)
