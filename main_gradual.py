@@ -211,7 +211,7 @@ def load_all(model, optimizer, path):
         max_epoch = 10
         founded = False
         for e in range(max_epoch):
-            _, accu = train(e, model, local_optimizer, chunk_num=cur_chunk_num)
+            _, accu, __ = train(e, model, local_optimizer, chunk_num=cur_chunk_num)
             if accu > old_train_accu - 0.5:
                 logger.info('******> Found a good initial position with training accuracy %.2f (vs. old %.2f) at epoch %d' % (
                 accu, old_train_accu, e))
@@ -337,6 +337,7 @@ param_ema = utils.TorchExponentialMovingAverage()
 def train(epoch, net, own_optimizer=None, increase_switch=False, chunk_num=1):
     logger.info('\nTraining epoch %d @ %.1f sec' % (epoch, time.time()))
     net.train()
+    new_chunk_num = chunk_num
     train_loss = 0
     correct = 0
     total = 0
@@ -391,7 +392,19 @@ def train(epoch, net, own_optimizer=None, increase_switch=False, chunk_num=1):
                 % (batch_idx+1, len(trainloader), train_loss/total, 100.*correct/total, correct, total))
             if args.switch_reg is not None:
                 logger.info('        ==> PSwitch L1 Reg.: %.6f ' % sreg)
-    return train_loss / total, 100.*correct/total
+
+        # a probe of potential OOM
+        if batch_idx < 10 and new_chunk_num == chunk_num:
+            for gpu_stat in GPUtil.getGPUs():
+                if gpu_stat.memoryFree < 1000:
+                    logger.info('******> hitting gpu memory limit. Only %d MB / %d MB is free in GPU %d.' % (
+                    gpu_stat.memoryFree, gpu_stat.memoryTotal, gpu_stat.id))
+                    new_chunk_num += 1
+                    logger.info('******> increased chunk number to %d' % new_chunk_num)
+                    gc.collect()
+                    break
+
+    return train_loss / total, 100.*correct/total, new_chunk_num
 
 def test(epoch, net, save=False):
     logger.info('Testing epoch %d @ %.1f sec' % (epoch, time.time()))
@@ -489,7 +502,7 @@ for interval in range(0, intervals):
             else:
                 set_learning_rate(optimizer, args.lr * 0.01)
         curves[epoch, 0] = epoch
-        curves[epoch, 1], curves[epoch, 2] = train(epoch, net, chunk_num=cur_chunk_num)
+        curves[epoch, 1], curves[epoch, 2], cur_chunk_num = train(epoch, net, chunk_num=cur_chunk_num)
         curves[epoch, 3], curves[epoch, 4] = test(epoch, net, save=True)
         curves[epoch, 5] = time.time() / 60.0
         ema.push(curves[epoch, 4])
@@ -519,15 +532,6 @@ for interval in range(0, intervals):
         pickle.dump(ema, open(os.path.join(save_path, 'ema.obj'), 'w'))
         pickle.dump(curves, open(os.path.join(save_path, 'curves.obj'), 'w'))
 
-        for gpu_stat in GPUtil.getGPUs():
-            if gpu_stat.memoryFree < 1000:
-                logger.info('******> hitting gpu memory limit. Only %d MB / %d MB is free in GPU %d.' % (
-                gpu_stat.memoryFree, gpu_stat.memoryTotal, gpu_stat.id))
-                cur_chunk_num += 1
-                logger.info('******> increased chunk number to %d' % cur_chunk_num)
-                gc.collect()
-                break
-
         # create a new net and optimizer
         current_arch = utils.next_arch(args.growing_mode, max_arch, current_arch, logger, sub=subnet_arch,
                                        rate=args.rate, group=growing_group)
@@ -556,7 +560,7 @@ for epoch in range(last_epoch + 1, last_epoch + 1 + num_tail_epochs):
         logger.info('======> decaying learning rate')
         decay_learning_rate(optimizer)
     curves[epoch, 0] = epoch
-    curves[epoch, 1], curves[epoch, 2] = train(epoch, net, chunk_num=cur_chunk_num)
+    curves[epoch, 1], curves[epoch, 2], cur_chunk_num = train(epoch, net, chunk_num=cur_chunk_num)
     curves[epoch, 3], curves[epoch, 4] = test(epoch, net, save=True)
     curves[epoch, 5] = time.time() / 60.0
     ema.push(curves[epoch, 4])
