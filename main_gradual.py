@@ -27,6 +27,9 @@ import numpy as np
 import models
 import utils
 import time
+import GPUtil
+import gc
+import pickle
 
 # from models import *
 parser = argparse.ArgumentParser(description='PyTorch ImageNet Training')
@@ -46,7 +49,7 @@ parser.add_argument('--grow-interval', '--gi', default=1, type=int, help='an int
 parser.add_argument('--stop-interval', '--si', default=30, type=int, help='an interval (in epochs) to grow new structures')
 parser.add_argument('--net', default='1-1-1-1', type=str, help='starting net')
 parser.add_argument('--sub-net', default='1-1-1-1', type=str, help='a sub net to grow')
-parser.add_argument('--max-net', default='32-32-72-32', type=str, help='The maximum net')
+parser.add_argument('--max-net', default='6-16-72-32', type=str, help='The maximum net')
 parser.add_argument('--residual', default='ResNetBasic', type=str,
                     help='the type of residual block (ResNetBasic or ResNetBottleneck)')
 parser.add_argument('--initializer', '--init', default='gaussian', type=str, help='initializers of new structures (zero, uniform, gaussian, adam)')
@@ -63,6 +66,7 @@ parser.add_argument('-j', '--workers', default=16, type=int, metavar='N',
                     help='number of data loading workers (default: 16)')
 
 args = parser.parse_args()
+cur_chunk_num = 1
 
 def list_to_str(l):
     list(map(str, l))
@@ -207,7 +211,7 @@ def load_all(model, optimizer, path):
         max_epoch = 10
         founded = False
         for e in range(max_epoch):
-            _, accu = train(e, model, local_optimizer)
+            _, accu = train(e, model, local_optimizer, chunk_num=cur_chunk_num)
             if accu > old_train_accu - 0.5:
                 logger.info('******> Found a good initial position with training accuracy %.2f (vs. old %.2f) at epoch %d' % (
                 accu, old_train_accu, e))
@@ -300,7 +304,6 @@ testloader = torch.utils.data.DataLoader(
     ])),
     batch_size=args.batch_size, shuffle=False,
     num_workers=args.workers, pin_memory=True)
-
 # Model
 logger.info('==> Building model..')
 current_arch = list(map(int, args.net.split('-')))
@@ -314,7 +317,6 @@ for cnt, v in enumerate(current_arch):
     if v < max_arch[cnt]:
         growing_group = cnt
         break
-
 net = get_module(args.residual, args.grow_interval, current_arch)
 # net = VGG('VGG19')
 # net = ResNet18()
@@ -328,11 +330,11 @@ net = get_module(args.residual, args.grow_interval, current_arch)
 # net = ShuffleNetG2()
 # net = SENet18()
 
-criterion = nn.CrossEntropyLoss()
+criterion = nn.CrossEntropyLoss(reduction='sum')
 optimizer = get_optimizer(net)
 param_ema = utils.TorchExponentialMovingAverage()
 # Training
-def train(epoch, net, own_optimizer=None, increase_switch=False):
+def train(epoch, net, own_optimizer=None, increase_switch=False, chunk_num=1):
     logger.info('\nTraining epoch %d @ %.1f sec' % (epoch, time.time()))
     net.train()
     train_loss = 0
@@ -347,14 +349,28 @@ def train(epoch, net, own_optimizer=None, increase_switch=False):
             own_optimizer.zero_grad()
         else:
             optimizer.zero_grad()
-        outputs = net(inputs)
-        loss = criterion(outputs, targets)
-        total_cost = loss
+
+        # avoid out of memory by split a batch to chunks
+        if targets.size(0) < chunk_num:
+            logger.warning('%d samples cannot be chunked to %d. Set the chunk number to %d' % (targets.size(0), chunk_num, targets.size(0)))
+            chunk_num = targets.size(0)
+        sub_inputs = inputs.chunk(chunk_num)
+        sub_targets = targets.chunk(chunk_num)
+        for chunk_ins, chunk_tgts in zip(sub_inputs, sub_targets):
+            outputs = net(chunk_ins)
+            loss = criterion(outputs, chunk_tgts)
+            loss.backward()
+            train_loss += loss.item()
+            _, predicted = outputs.max(1)
+            total += chunk_tgts.size(0)
+            correct += predicted.eq(chunk_tgts).sum().item()
+        for p in net.parameters():
+            p.grad.data.div_(len(inputs))
         sreg = 0.0
         if args.switch_reg is not None:
             sreg = reg_pswitchs(net)
-            total_cost += sreg
-        total_cost.backward()
+            sreg.backward()
+
         if own_optimizer is not None:
             own_optimizer.step()
         else:
@@ -370,16 +386,12 @@ def train(epoch, net, own_optimizer=None, increase_switch=False):
                 params_data_dict[n] = p.data
             param_ema.push(params_data_dict)
 
-        train_loss += loss.item()
-        _, predicted = outputs.max(1)
-        total += targets.size(0)
-        correct += predicted.eq(targets).sum().item()
         if 0 == batch_idx % 100 or batch_idx == len(trainloader) - 1:
             logger.info('(%d/%d) ==> Loss: %.3f | Acc: %.3f%% (%d/%d)'
-                % (batch_idx+1, len(trainloader), train_loss/(batch_idx+1), 100.*correct/total, correct, total))
+                % (batch_idx+1, len(trainloader), train_loss/total, 100.*correct/total, correct, total))
             if args.switch_reg is not None:
                 logger.info('        ==> PSwitch L1 Reg.: %.6f ' % sreg)
-    return train_loss / len(trainloader), 100.*correct/total
+    return train_loss / total, 100.*correct/total
 
 def test(epoch, net, save=False):
     logger.info('Testing epoch %d @ %.1f sec' % (epoch, time.time()))
@@ -403,7 +415,7 @@ def test(epoch, net, save=False):
             correct += predicted.eq(targets).sum().item()
             if 0 == batch_idx % 100 or batch_idx == len(testloader) - 1:
                 logger.info('(%d/%d) ==> Loss: %.3f | Acc: %.3f%% (%d/%d)'
-                    % (batch_idx+1, len(testloader), test_loss/(batch_idx+1), 100.*correct/total, correct, total))
+                    % (batch_idx+1, len(testloader), test_loss/total, 100.*correct/total, correct, total))
 
     # Save checkpoint.
     acc = 100.*correct/total
@@ -422,7 +434,7 @@ def test(epoch, net, save=False):
         if args.ema_params:
             utils.set_named_parameters(net, orig_params, strict=True)
 
-    return test_loss / len(testloader), acc
+    return test_loss / total, acc
 
 # main func
 
@@ -477,7 +489,7 @@ for interval in range(0, intervals):
             else:
                 set_learning_rate(optimizer, args.lr * 0.01)
         curves[epoch, 0] = epoch
-        curves[epoch, 1], curves[epoch, 2] = train(epoch, net)
+        curves[epoch, 1], curves[epoch, 2] = train(epoch, net, chunk_num=cur_chunk_num)
         curves[epoch, 3], curves[epoch, 4] = test(epoch, net, save=True)
         curves[epoch, 5] = time.time() / 60.0
         ema.push(curves[epoch, 4])
@@ -504,6 +516,18 @@ for interval in range(0, intervals):
                  net,
                  optimizer,
                  save_ckpt)
+        pickle.dump(ema, open(os.path.join(save_path, 'ema.obj'), 'w'))
+        pickle.dump(curves, open(os.path.join(save_path, 'curves.obj'), 'w'))
+
+        for gpu_stat in GPUtil.getGPUs():
+            if gpu_stat.memoryFree < 1000:
+                logger.info('******> hitting gpu memory limit. Only %d MB / %d MB is free in GPU %d.' % (
+                gpu_stat.memoryFree, gpu_stat.memoryTotal, gpu_stat.id))
+                cur_chunk_num += 1
+                logger.info('******> increased chunk number to %d' % cur_chunk_num)
+                gc.collect()
+                break
+
         # create a new net and optimizer
         current_arch = utils.next_arch(args.growing_mode, max_arch, current_arch, logger, sub=subnet_arch,
                                        rate=args.rate, group=growing_group)
@@ -532,7 +556,7 @@ for epoch in range(last_epoch + 1, last_epoch + 1 + num_tail_epochs):
         logger.info('======> decaying learning rate')
         decay_learning_rate(optimizer)
     curves[epoch, 0] = epoch
-    curves[epoch, 1], curves[epoch, 2] = train(epoch, net)
+    curves[epoch, 1], curves[epoch, 2] = train(epoch, net, chunk_num=cur_chunk_num)
     curves[epoch, 3], curves[epoch, 4] = test(epoch, net, save=True)
     curves[epoch, 5] = time.time() / 60.0
     ema.push(curves[epoch, 4])
