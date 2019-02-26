@@ -26,6 +26,8 @@ nets = [
     ('CifarResNetBasic', [18, 18, 18], 93.79),
     ('CifarResNetBasic', [24, 24, 24], 94.26),
     ('CifarResNetBasic', [48, 48, 48], 94.54),
+    # growing
+    ('CifarResNetBasic', [42, 42, 41], 94.31),
 
 ]
 
