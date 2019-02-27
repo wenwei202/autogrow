@@ -63,13 +63,15 @@ parser.add_argument('--evaluate', default='', type=str, metavar='PATH',
 parser.add_argument('--resume', default='', type=str, metavar='PATH',
                     help='path to checkpoint to resume (default: none)')
 parser.add_argument('--start-epoch', default=0, type=int, help='start epoch')
+parser.add_argument('--start-group', default=0, type=int, help='start group to grow')
+parser.add_argument('--start-chunk', default=1, type=int, help='start chunk number to avoid OOM')
 parser.add_argument('--data', default='./imagenet', type=str, metavar='PATH',
                     help='path to imagenet dataset (default: ./imagenet)')
 parser.add_argument('-j', '--workers', default=16, type=int, metavar='N',
                     help='number of data loading workers (default: 16)')
 
 args = parser.parse_args()
-cur_chunk_num = 1
+cur_chunk_num = args.start_chunk
 
 def list_to_str(l):
     list(map(str, l))
@@ -315,9 +317,15 @@ max_arch = list(map(int, args.max_net.split('-')))
 if len(current_arch) != len(max_arch):
     logger.fatal('max_arch has different size.')
     exit()
+for v1, v2 in zip(current_arch, max_arch):
+    if v1 > v2:
+        logger.error('current arch is larger than max arch! Exit!')
+        exit()
 growing_group = -1
-for cnt, v in enumerate(current_arch):
-    if v < max_arch[cnt]:
+for idx in range(len(current_arch)):
+    cnt = (idx + args.start_group) % len(current_arch)
+# for cnt, v in enumerate(current_arch):
+    if current_arch[cnt] < max_arch[cnt]:
         growing_group = cnt
         break
 net = get_module(args.residual, args.grow_interval, current_arch)
@@ -444,6 +452,9 @@ def test(epoch, net, save=False):
             'epoch': epoch,
         }
         torch.save(state, os.path.join(save_path, 'best_ckpt.t7'))
+        save_all(epoch, None, net, optimizer,
+                 os.path.join(save_path, 'best_model_optimizer_ckpt.t7'))
+
     best_acc = acc if acc > best_acc else best_acc
 
     with torch.no_grad():
@@ -491,16 +502,36 @@ num_tail_epochs = args.tail_epochs # if (args.optimizer == 'sgd' or args.optimiz
 last_epoch = -1
 growing_epochs = []
 intervals = (args.epochs - 1) // args.grow_interval + 1
+if args.resume:
+    ckpt_file = None
+    if intervals > 0 and args.start_epoch == 0:
+        logger.info('resuming a growing model')
+        if os.path.isfile(os.path.join(args.resume, 'ema.obj')):
+            ema = pickle.load(open(os.path.join(args.resume, 'ema.obj'), 'r'))
+            logger.info('Previous max val accuracy: \n {}'.format(np.array_str(np.array(ema.get()))))
+        else:
+            logger.warning('ema.obj does not exist. Growing may be extended.')
+        ckpt_file = os.path.join(args.resume, 'resnet-growing_ckpt.t7')
+        saved_epoch = load_all(net, optimizer, ckpt_file)
+    elif intervals == 0 and args.start_epoch < num_tail_epochs:
+        logger.info('resuming a post-growing model')
+        ckpt_file = os.path.join(args.resume, 'best_model_optimizer_ckpt.t7')
+        if os.path.isfile(ckpt_file):
+            saved_epoch = load_all(net, optimizer, ckpt_file)
+        else:
+            logger.warning('Only model states are resumed (no optimizer states).')
+            ckpt_file = os.path.join(args.resume, 'best_ckpt.t7')
+            checkpoint = torch.load(ckpt_file)
+            saved_epoch = checkpoint['epoch']
+            net.load_state_dict(checkpoint['net'])
+    else:
+        logger.error('resuming with unexpected args! Exit!')
+        exit()
+    logger.info('resumed from %s (saved at epoch %d)' % (ckpt_file, saved_epoch))
+    test(saved_epoch, net)
+
 # epoch, train loss, train accu, test loss, test accu, timestamps
 curves = np.zeros((intervals*args.grow_interval + num_tail_epochs, 6))
-if args.resume:
-    if intervals > 0:
-        logger.error('resume only supported after growing')
-        exit()
-    ckpt_file = args.resume
-    saved_epoch = load_all(net, optimizer, ckpt_file)
-    logger.info('resumed model from %s (saved at epoch %d)' % (ckpt_file, saved_epoch))
-    test(saved_epoch, net)
 for interval in range(0, intervals):
     # training and testing
     for epoch in range(interval*args.grow_interval, (interval+1)*args.grow_interval):
@@ -567,11 +598,11 @@ for interval in range(0, intervals):
 set_learning_rate(optimizer, args.lr)
 for epoch in range(last_epoch + 1 + args.start_epoch, last_epoch + 1 + num_tail_epochs):
     if args.optimizer == 'sgd' or args.optimizer == 'sgdc':
-        if epoch == last_epoch + 1 + num_tail_epochs // 3:
-            logger.info('======> decaying learning rate')
+        if epoch < last_epoch + 1 + num_tail_epochs // 3:
+            set_learning_rate(optimizer, args.lr)
+        elif epoch < last_epoch + 1 + num_tail_epochs * 2 // 3:
             set_learning_rate(optimizer, args.lr * 0.1)
-        elif epoch == last_epoch + 1 + num_tail_epochs * 2 // 3:
-            logger.info('======> decaying learning rate')
+        else:
             set_learning_rate(optimizer, args.lr * 0.01)
     curves[epoch, 0] = epoch
     curves[epoch, 1], curves[epoch, 2], _ = train(epoch, net, chunk_num=cur_chunk_num)
