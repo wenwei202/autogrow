@@ -56,6 +56,10 @@ parser.add_argument('--init-meta', default=1.0, type=float, help='a meta paramet
 parser.add_argument('--batch-size', '--bz', default=128, type=int, help='batch size')
 parser.add_argument('--evaluate', default='', type=str, metavar='PATH',
                     help='path to checkpoint (default: none)')
+parser.add_argument('--pad-net', default='', type=str, metavar='PATH',
+                    help='a smallest net to be padded to (default: none)')
+parser.add_argument('--pad-epochs', default=4, type=int, help='the padding step for visualization')
+
 args = parser.parse_args()
 
 def list_to_str(l):
@@ -102,6 +106,25 @@ def params_name_to_id(net):
     for k, v in net.named_parameters():
         themap[k] = id(v)
     return themap
+
+def save_model_with_padding(epoch, train_accu, model, new_arch, path):
+    new_model = get_module(args.residual, args.grow_interval, new_arch)
+    orig_params_data = {}
+    for n, p in model.named_parameters():
+        orig_params_data[n] = p.data
+    for n, p in new_model.named_parameters():
+        if n not in orig_params_data:
+            logger.info('%s are set to zeros' % n)
+            p.data.zero_()
+        else:
+            logger.info('%s are kept' % n)
+            p.data = orig_params_data[n]
+
+    torch.save({
+        'epoch': epoch,
+        'train_accu': train_accu,
+        'net': new_model.state_dict(),
+    }, path)
 
 def save_all(epoch, train_accu, model, optimizer, path):
     torch.save({
@@ -293,6 +316,7 @@ logger.info('==> Building model..')
 current_arch = list(map(int, args.net.split('-')))
 subnet_arch = list(map(int, args.sub_net.split('-')))
 max_arch = list(map(int, args.max_net.split('-')))
+pad_arch = list(map(int, args.pad_net.split('-'))) if args.pad_net else None
 if len(current_arch) != len(max_arch):
     logger.fatal('max_arch has different size.')
     exit()
@@ -468,6 +492,9 @@ for interval in range(0, intervals):
         curves[epoch, 3], curves[epoch, 4] = test(epoch, net, save=True)
         curves[epoch, 5] = time.time() / 60.0
         ema.push(curves[epoch, 4])
+        if args.pad_net and (epoch % args.pad_epochs == 0):
+            save_model_with_padding(epoch, curves[epoch, 2], net, pad_arch,
+                                    os.path.join(save_path, 'model_pad_%d.t7' % epoch))
 
     # limit max arch
     logger.info('******> improved %.3f (ExponentialMovingAverage) in the last %d epochs' % (
@@ -523,6 +550,9 @@ for epoch in range(last_epoch + 1, last_epoch + 1 + num_tail_epochs):
     curves[epoch, 3], curves[epoch, 4] = test(epoch, net, save=True)
     curves[epoch, 5] = time.time() / 60.0
     ema.push(curves[epoch, 4])
+    if args.pad_net and (epoch % args.pad_epochs == 0):
+        save_model_with_padding(epoch, curves[epoch, 2], net, pad_arch,
+                                os.path.join(save_path, 'model_pad_%d.t7' % epoch))
 
 # align time
 for e in range(curves.shape[0]):
