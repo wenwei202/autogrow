@@ -60,6 +60,9 @@ parser.add_argument('--reset-states', '--rs', action='store_true', help='reset o
 parser.add_argument('--init-meta', default=1.0, type=float, help='a meta parameter for initializer')
 parser.add_argument('--evaluate', default='', type=str, metavar='PATH',
                     help='path to checkpoint (default: none)')
+parser.add_argument('--resume', default='', type=str, metavar='PATH',
+                    help='path to checkpoint to resume (default: none)')
+parser.add_argument('--start-epoch', default=0, type=int, help='start epoch')
 parser.add_argument('--data', default='./imagenet', type=str, metavar='PATH',
                     help='path to imagenet dataset (default: ./imagenet)')
 parser.add_argument('-j', '--workers', default=16, type=int, metavar='N',
@@ -112,6 +115,7 @@ def params_name_to_id(net):
     for k, v in net.named_parameters():
         themap[k] = id(v)
     return themap
+
 
 def save_all(epoch, train_accu, model, optimizer, path):
     torch.save({
@@ -263,7 +267,6 @@ def decay_learning_rate(optimizer):
 
 device = 'cuda' # if torch.cuda.is_available() else 'cpu'
 best_acc = 0  # best test accuracy
-start_epoch = 0  # start from epoch 0 or last checkpoint epoch
 
 save_path = os.path.join('./results', datetime.now().strftime('%Y-%m-%d_%H-%M-%S'))
 if not os.path.exists(save_path):
@@ -400,7 +403,7 @@ def train(epoch, net, own_optimizer=None, increase_switch=False, chunk_num=1):
                     logger.info('******> hitting gpu memory limit. Only %d MB / %d MB is free in GPU %d.' % (
                     gpu_stat.memoryFree, gpu_stat.memoryTotal, gpu_stat.id))
                     new_chunk_num += 1
-                    logger.info('******> increased chunk number to %d' % new_chunk_num)
+                    logger.info('******> may increase the chunk number to %d' % new_chunk_num)
                     gc.collect()
                     break
 
@@ -490,6 +493,14 @@ growing_epochs = []
 intervals = (args.epochs - 1) // args.grow_interval + 1
 # epoch, train loss, train accu, test loss, test accu, timestamps
 curves = np.zeros((intervals*args.grow_interval + num_tail_epochs, 6))
+if args.resume:
+    if intervals > 0:
+        logger.error('resume only supported after growing')
+        exit()
+    ckpt_file = args.resume
+    saved_epoch = load_all(net, optimizer, ckpt_file)
+    logger.info('resumed model from %s (saved at epoch %d)' % (ckpt_file, saved_epoch))
+    test(saved_epoch, net)
 for interval in range(0, intervals):
     # training and testing
     for epoch in range(interval*args.grow_interval, (interval+1)*args.grow_interval):
@@ -554,13 +565,16 @@ for interval in range(0, intervals):
     last_epoch = (interval + 1) * args.grow_interval - 1
 
 set_learning_rate(optimizer, args.lr)
-for epoch in range(last_epoch + 1, last_epoch + 1 + num_tail_epochs):
-    if ((epoch == last_epoch + 1 + num_tail_epochs // 3) or (epoch == last_epoch + 1 + num_tail_epochs * 2 // 3)) and (
-            args.optimizer == 'sgd' or args.optimizer == 'sgdc'):
-        logger.info('======> decaying learning rate')
-        decay_learning_rate(optimizer)
+for epoch in range(last_epoch + 1 + args.start_epoch, last_epoch + 1 + num_tail_epochs):
+    if args.optimizer == 'sgd' or args.optimizer == 'sgdc':
+        if epoch == last_epoch + 1 + num_tail_epochs // 3:
+            logger.info('======> decaying learning rate')
+            set_learning_rate(optimizer, args.lr * 0.1)
+        elif epoch == last_epoch + 1 + num_tail_epochs * 2 // 3:
+            logger.info('======> decaying learning rate')
+            set_learning_rate(optimizer, args.lr * 0.01)
     curves[epoch, 0] = epoch
-    curves[epoch, 1], curves[epoch, 2], cur_chunk_num = train(epoch, net, chunk_num=cur_chunk_num)
+    curves[epoch, 1], curves[epoch, 2], _ = train(epoch, net, chunk_num=cur_chunk_num)
     curves[epoch, 3], curves[epoch, 4] = test(epoch, net, save=True)
     curves[epoch, 5] = time.time() / 60.0
     ema.push(curves[epoch, 4])
@@ -621,16 +635,18 @@ for idx in range(len(plot_segs)-1):
         ax4.plot(curves[start:end, 5], curves[start:end, 2], '--', color=[c * coef for c in clr2], markersize=markersize, label='_nolegend_')
         ax4.plot(curves[start:end, 5], curves[start:end, 4], '-', color=[c * coef for c in clr2], markersize=markersize, label='_nolegend_')
 
-ax2.plot(curves[:, 0], ema.get(), '-', color=[1.0, 0, 1.0])
+if len(ema.get()) == curves.shape[0]:
+    ax2.plot(curves[:, 0], ema.get(), '-', color=[1.0, 0, 1.0])
 logger.info('Val accuracy moving average: \n {}'.format(np.array_str(np.array(ema.get()))))
 np.savetxt(os.path.join(save_path, 'ema.dat'), np.array(ema.get()))
-ax2.set_ylim(bottom=40, top=100)
+ax2.set_ylim(bottom=20, top=100)
 ax1.legend(('Train loss', 'Val loss'), loc='lower right')
 ax2.legend(('Train accuracy', 'Val accuracy', 'Val max'), loc='lower left')
 fig.savefig(os.path.join(save_path, 'curves-vs-epochs.pdf'))
 
-ax4.plot(curves[:, 5], ema.get(), '-', color=[1.0, 0, 1.0])
-ax4.set_ylim(bottom=20, top=85)
+if len(ema.get()) == curves.shape[0]:
+    ax4.plot(curves[:, 5], ema.get(), '-', color=[1.0, 0, 1.0])
+ax4.set_ylim(bottom=20, top=100)
 ax3.legend(('Train loss', 'Val loss'), loc='lower right')
 ax4.legend(('Train accuracy', 'Val accuracy', 'Val moving avg'), loc='lower left')
 fig2.savefig(os.path.join(save_path, 'curves-vs-time.pdf'))
