@@ -3,6 +3,16 @@ from flops_counter import get_model_complexity_info
 import models as mymodels
 
 nets = [
+    # pruning from 96-96-96
+    ('CifarResNetBasic', [1, 3, 4], 91.09),
+    ('CifarResNetBasic', [1, 6, 7], 92.52),
+    ('CifarResNetBasic', [2, 11, 17], 92.96),
+    ('CifarResNetBasic', [4, 17, 41], 93.59),
+#    ('CifarResNetBasic', [2, 22, 63], 93.72),
+    ('CifarResNetBasic', [3, 24, 36], 93.74),
+    ('CifarResNetBasic', [7, 36, 56], 93.88),
+    ('CifarResNetBasic', [7, 45, 64], 93.96),
+
     # pruning from 48-48-48
     ('CifarResNetBasic', [1, 4, 8], 91.98),
     ('CifarResNetBasic', [4, 13, 10], 93.43),
