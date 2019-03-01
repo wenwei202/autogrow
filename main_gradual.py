@@ -59,6 +59,7 @@ parser.add_argument('--evaluate', default='', type=str, metavar='PATH',
 parser.add_argument('--pad-net', default='', type=str, metavar='PATH',
                     help='a smallest net to be padded to (default: none)')
 parser.add_argument('--pad-epochs', default=4, type=int, help='the padding step for visualization')
+parser.add_argument('--dataset-ratio', default=1.0, type=float, help='the ratio of training dataset for learning')
 
 args = parser.parse_args()
 
@@ -304,6 +305,9 @@ transform_test = transforms.Compose([
 ])
 
 trainset = torchvision.datasets.CIFAR10(root='./data', train=True, download=True, transform=transform_train)
+train_sample_num = int(len(trainset) * args.dataset_ratio)
+trainset, _ = torch.utils.data.random_split(trainset, [train_sample_num, len(trainset) - train_sample_num])
+logger.info('%d training samples are used for training' % len(trainset))
 trainloader = torch.utils.data.DataLoader(trainset, batch_size=args.batch_size, shuffle=True, num_workers=2)
 
 testset = torchvision.datasets.CIFAR10(root='./data', train=False, download=True, transform=transform_test)
