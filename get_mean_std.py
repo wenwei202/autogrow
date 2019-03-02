@@ -58,7 +58,7 @@ for batch_idx, (inputs, targets) in enumerate(trainloader):
     else:
         chsum += inputs.sum(dim=(0, 2, 3), keepdim=True)
 mean = chsum/len(trainset)/h/w
-print(mean.view(-1))
+print('mean: %s' % mean.view(-1))
 
 chsum = None
 for batch_idx, (inputs, targets) in enumerate(trainloader):
@@ -68,6 +68,6 @@ for batch_idx, (inputs, targets) in enumerate(trainloader):
     else:
         chsum += (inputs - mean).pow(2).sum(dim=(0, 2, 3), keepdim=True)
 std = torch.sqrt(chsum/(len(trainset) * h * w - 1))
-print(std.view(-1))
+print('std: %s' % std.view(-1))
 
 print('Done!')
