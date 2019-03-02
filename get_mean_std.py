@@ -39,7 +39,11 @@ print('==> Preparing data..')
 transform_train = transforms.Compose([
     transforms.ToTensor(),
 ])
-trainset = getattr(torchvision.datasets, args.dataset)(root='./data-'+args.dataset, train=True, download=True, transform=transform_train)
+if 'SVHN' == args.dataset:
+    trainset = getattr(torchvision.datasets, args.dataset)(root='./data-' + args.dataset, split='train', download=True,
+                                                           transform=transform_train)
+else:
+    trainset = getattr(torchvision.datasets, args.dataset)(root='./data-'+args.dataset, train=True, download=True, transform=transform_train)
 print('%d training samples.' % len(trainset))
 
 trainloader = torch.utils.data.DataLoader(trainset, batch_size=args.batch_size, num_workers=2)
