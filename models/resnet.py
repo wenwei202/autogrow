@@ -91,11 +91,11 @@ class Bottleneck(nn.Module):
 
 
 class ResNet(nn.Module):
-    def __init__(self, block, num_blocks, num_classes=10):
+    def __init__(self, block, num_blocks, num_classes=10, image_channels=3):
         super(ResNet, self).__init__()
         self.in_planes = 64
 
-        self.conv1 = nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1, bias=False)
+        self.conv1 = nn.Conv2d(image_channels, 64, kernel_size=3, stride=1, padding=1, bias=False)
         self.bn1 = nn.BatchNorm2d(64)
         self.layer1 = self._make_layer(block, 64, num_blocks[0], stride=1)
         self.layer2 = self._make_layer(block, 128, num_blocks[1], stride=2)
@@ -123,11 +123,11 @@ class ResNet(nn.Module):
         return out
 
 class CifarResNet(nn.Module):
-    def __init__(self, block, num_blocks, num_classes=10):
+    def __init__(self, block, num_blocks, num_classes=10, image_channels=3):
         super(CifarResNet, self).__init__()
         self.in_planes = 16
 
-        self.conv1 = nn.Conv2d(3, 16, kernel_size=3, stride=1, padding=1, bias=False)
+        self.conv1 = nn.Conv2d(image_channels, 16, kernel_size=3, stride=1, padding=1, bias=False)
         self.bn1 = nn.BatchNorm2d(16)
         self.layer1 = self._make_layer(block, 16, num_blocks[0], stride=1)
         self.layer2 = self._make_layer(block, 32, num_blocks[1], stride=2)
@@ -152,21 +152,22 @@ class CifarResNet(nn.Module):
         out = self.linear(out)
         return out
 
-def CifarResNetBasic(num_blocks):
+def CifarResNetBasic(num_blocks, num_classes=10, image_channels=3):
     assert len(num_blocks) == 3, "3 blocks are needed, but %d is found." % len(num_blocks)
-    return CifarResNet(BasicBlock, num_blocks)
+    print ('num_classes=%d, image_channels=%d' % (num_classes, image_channels))
+    return CifarResNet(BasicBlock, num_blocks, num_classes=num_classes, image_channels=image_channels)
 
-def CifarSwitchResNetBasic(num_blocks):
+def CifarSwitchResNetBasic(num_blocks, num_classes=10, image_channels=3):
     assert len(num_blocks) == 3, "3 blocks are needed, but %d is found." % len(num_blocks)
-    return CifarResNet(BasicSwitchBlock, num_blocks)
+    return CifarResNet(BasicSwitchBlock, num_blocks, num_classes=num_classes, image_channels=image_channels)
 
-def ResNetBasic(num_blocks):
+def ResNetBasic(num_blocks, num_classes=10, image_channels=3):
     assert len(num_blocks) == 4, "4 blocks are needed, but %d is found." % len(num_blocks)
-    return ResNet(BasicBlock, num_blocks)
+    return ResNet(BasicBlock, num_blocks, num_classes=num_classes, image_channels=image_channels)
 
-def ResNetBottleneck(num_blocks):
+def ResNetBottleneck(num_blocks, num_classes=10, image_channels=3):
     assert len(num_blocks) == 4, "4 blocks are needed, but %d is found." % len(num_blocks)
-    return ResNet(Bottleneck, num_blocks)
+    return ResNet(Bottleneck, num_blocks, num_classes=num_classes, image_channels=image_channels)
 
 def ResNet18():
     return ResNet(BasicBlock, [2,2,2,2])

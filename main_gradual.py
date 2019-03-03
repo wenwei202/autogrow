@@ -60,6 +60,7 @@ parser.add_argument('--pad-net', default='', type=str, metavar='PATH',
                     help='a smallest net to be padded to (default: none)')
 parser.add_argument('--pad-epochs', default=4, type=int, help='the padding step for visualization')
 parser.add_argument('--dataset-ratio', default=1.0, type=float, help='the ratio of training dataset for learning')
+parser.add_argument('--dataset', default='CIFAR10', type=str, help='dataset (CIFAR10, CIFAR100, SVHN, FashionMNIST, MNIST)')
 
 args = parser.parse_args()
 
@@ -109,7 +110,9 @@ def params_name_to_id(net):
     return themap
 
 def save_model_with_padding(epoch, train_accu, model, new_arch, path):
-    new_model = get_module(args.residual, args.grow_interval, new_arch)
+    new_model = get_module(args.residual, args.grow_interval, new_arch,
+                           num_classes=utils.datasets[args.dataset]['num_classes'],
+                           image_channels=utils.datasets[args.dataset]['image_channels'])
     orig_params_data = {}
     for n, p in model.named_parameters():
         orig_params_data[n] = p.data
@@ -291,29 +294,56 @@ logger.info("Saving to %s", save_path)
 logger.info("Running arguments: %s", args)
 
 # Data
-logger.info('==> Preparing data..')
-transform_train = transforms.Compose([
-    transforms.RandomCrop(32, padding=4),
-    transforms.RandomHorizontalFlip(),
-    transforms.ToTensor(),
-    transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
-])
+logger.info('==> Preparing data %s..' % args.dataset)
+train_padding = 4 if utils.datasets[args.dataset]['size'] == 32 else (32 - utils.datasets[args.dataset]['size'] ) / 2
+test_padding = 0 if utils.datasets[args.dataset]['size'] == 32 else (32 - utils.datasets[args.dataset]['size'] ) / 2
+assert (test_padding * 2 + utils.datasets[args.dataset]['size']) == 32
+logger.info('train pad = %d, test pad = %d' % (train_padding, test_padding))
+if 'CIFAR10' == args.dataset or 'CIFAR100' == args.dataset or 'FashionMNIST' == args.dataset:
+    logger.info('==> RandomHorizontalFlip enabled..')
+    transform_train = transforms.Compose([
+        transforms.RandomCrop(32, padding=train_padding),
+        transforms.RandomHorizontalFlip(),
+        transforms.ToTensor(),
+        transforms.Normalize(utils.datasets[args.dataset]['mean'], utils.datasets[args.dataset]['std']),
+    ])
+else:
+    logger.info('==> RandomHorizontalFlip disabled..')
+    transform_train = transforms.Compose([
+        transforms.RandomCrop(32, padding=train_padding),
+        transforms.ToTensor(),
+        transforms.Normalize(utils.datasets[args.dataset]['mean'], utils.datasets[args.dataset]['std']),
+    ])
 
 transform_test = transforms.Compose([
+    transforms.RandomCrop(32, padding=test_padding), # deterministic
     transforms.ToTensor(),
-    transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
+    transforms.Normalize(utils.datasets[args.dataset]['mean'], utils.datasets[args.dataset]['std']),
 ])
 
-trainset = torchvision.datasets.CIFAR10(root='./data', train=True, download=True, transform=transform_train)
+# trainset = torchvision.datasets.CIFAR10(root='./data', train=True, download=True, transform=transform_train)
+if 'SVHN' == args.dataset:
+    trainset = getattr(torchvision.datasets, args.dataset)(root='./data-' + args.dataset, split='train', download=True,
+                                                           transform=transform_train)
+else:
+    trainset = getattr(torchvision.datasets, args.dataset)(root='./data-' + args.dataset, train=True, download=True,
+                                                           transform=transform_train)
+logger.info('%d training samples.' % len(trainset))
+
 train_sample_num = int(len(trainset) * args.dataset_ratio)
 trainset, _ = torch.utils.data.random_split(trainset, [train_sample_num, len(trainset) - train_sample_num])
 logger.info('%d training samples are used for training' % len(trainset))
 trainloader = torch.utils.data.DataLoader(trainset, batch_size=args.batch_size, shuffle=True, num_workers=2)
 
-testset = torchvision.datasets.CIFAR10(root='./data', train=False, download=True, transform=transform_test)
+# testset = torchvision.datasets.CIFAR10(root='./data', train=False, download=True, transform=transform_test)
+if 'SVHN' == args.dataset:
+    testset = getattr(torchvision.datasets, args.dataset)(root='./data-' + args.dataset, split='test', download=True, transform=transform_test)
+else:
+    testset = getattr(torchvision.datasets, args.dataset)(root='./data-' + args.dataset, train=False, download=True, transform=transform_test)
 testloader = torch.utils.data.DataLoader(testset, batch_size=100, shuffle=False, num_workers=2)
+logger.info('%d test samples.' % len(testset))
 
-classes = ('plane', 'car', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck')
+# classes = ('plane', 'car', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck')
 
 # Model
 logger.info('==> Building model..')
@@ -330,7 +360,9 @@ for cnt, v in enumerate(current_arch):
         growing_group = cnt
         break
 
-net = get_module(args.residual, args.grow_interval, current_arch)
+net = get_module(args.residual, args.grow_interval, current_arch,
+                num_classes=utils.datasets[args.dataset]['num_classes'],
+                image_channels=utils.datasets[args.dataset]['image_channels'])
 # net = VGG('VGG19')
 # net = ResNet18()
 # net = PreActResNet18()
@@ -527,7 +559,9 @@ for interval in range(0, intervals):
                                        rate=args.rate, group=growing_group)
         logger.info(
             '******> growing to resnet-%s before epoch %d' % (list_to_str(current_arch), (interval + 1) * args.grow_interval))
-        net = get_module(args.residual, args.grow_interval, num_blocks=current_arch)
+        net = get_module(args.residual, args.grow_interval, num_blocks=current_arch,
+                           num_classes=utils.datasets[args.dataset]['num_classes'],
+                           image_channels=utils.datasets[args.dataset]['image_channels'])
         optimizer = get_optimizer(net)
         loaded_epoch = load_all(net, optimizer, save_ckpt)
         logger.info('testing new model ...')

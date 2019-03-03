@@ -14,6 +14,14 @@ import numpy as np
 import torch.nn as nn
 import torch.nn.init as init
 
+datasets = { 'CIFAR10': {'mean': (0.4914, 0.4822, 0.4465), 'std': (0.2023, 0.1994, 0.2010), 'num_classes': 10, 'image_channels': 3, 'size': 32}, # std is wrong. should be [0.2471, 0.2435, 0.2616]
+            'CIFAR100': {'mean': (0.5071, 0.4865, 0.4409), 'std': (0.2673, 0.2564, 0.2762), 'num_classes': 100, 'image_channels': 3, 'size': 32},
+            'SVHN': {'mean': (0.4377, 0.4438, 0.4728), 'std': (0.1980, 0.2010, 0.1970), 'num_classes': 10, 'image_channels': 3, 'size': 32},
+
+            'FashionMNIST': {'mean': (0.0,), 'std': (1.0,), 'num_classes': 10, 'image_channels': 1, 'size': 28},
+            'MNIST': {'mean': (0.0,), 'std': (1.0,), 'num_classes': 10, 'image_channels': 1, 'size': 28},
+}
+
 class MovingMaximum(object):
     def __init__(self):
         self.data = [] # data[i] is the maximum val in data[0:i+1]
