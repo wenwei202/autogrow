@@ -64,6 +64,7 @@ parser.add_argument('--resume', default='', type=str, metavar='PATH',
                     help='path to checkpoint to resume (default: none)')
 parser.add_argument('--start-epoch', default=0, type=int, help='start epoch')
 parser.add_argument('--start-group', default=0, type=int, help='start group to grow')
+parser.add_argument('--grown-group', default=None, type=int, help='grown group')
 parser.add_argument('--start-chunk', default=1, type=int, help='start chunk number to avoid OOM')
 parser.add_argument('--data', default='./imagenet', type=str, metavar='PATH',
                     help='path to imagenet dataset (default: ./imagenet)')
@@ -322,6 +323,8 @@ for v1, v2 in zip(current_arch, max_arch):
         logger.error('current arch is larger than max arch! Exit!')
         exit()
 growing_group = -1
+grown_group = args.grown_group
+
 for idx in range(len(current_arch)):
     cnt = (idx + args.start_group) % len(current_arch)
 # for cnt, v in enumerate(current_arch):
@@ -557,8 +560,9 @@ for interval in range(0, intervals):
         '******> improved %.3f (ExponentialMovingAverage) in the last %d epochs' % (delta_accu, args.stop_interval))
     if delta_accu < args.grow_threshold: # no improvement
         if args.growing_mode == 'group':
-            max_arch[growing_group] = current_arch[growing_group]
-            logger.info('******> stop growing group %d permanently. Limited as %s .' % (growing_group, list_to_str(max_arch)))
+            if grown_group is not None:
+                max_arch[grown_group] = current_arch[grown_group]
+                logger.info('******> stop growing group %d permanently. Limited as %s .' % (grown_group, list_to_str(max_arch)))
         else:
             max_arch[:] = current_arch[:]
             logger.info('******> stop growing all permanently. Limited as %s .' % (list_to_str(max_arch)))
@@ -586,6 +590,7 @@ for interval in range(0, intervals):
         # test(loaded_epoch, net)
         growing_epochs.append((interval + 1) * args.grow_interval)
         if args.growing_mode == 'group':
+            grown_group = growing_group
             growing_group = utils.next_group(growing_group, max_arch, current_arch, logger)
     else:
         logger.info('******> stop growing all groups')
