@@ -355,6 +355,7 @@ if len(current_arch) != len(max_arch):
     logger.fatal('max_arch has different size.')
     exit()
 growing_group = -1
+grown_group = None
 for cnt, v in enumerate(current_arch):
     if v < max_arch[cnt]:
         growing_group = cnt
@@ -540,8 +541,9 @@ for interval in range(0, intervals):
         '******> improved %.3f (ExponentialMovingAverage) in the last %d epochs' % (delta_accu, args.stop_interval))
     if delta_accu < args.grow_threshold: # no improvement
         if args.growing_mode == 'group':
-            max_arch[growing_group] = current_arch[growing_group]
-            logger.info('******> stop growing group %d permanently. Limited as %s .' % (growing_group, list_to_str(max_arch)))
+            if grown_group is not None:
+                max_arch[grown_group] = current_arch[grown_group]
+                logger.info('******> stop growing group %d permanently. Limited as %s .' % (grown_group, list_to_str(max_arch)))
         else:
             max_arch[:] = current_arch[:]
             logger.info('******> stop growing all permanently. Limited as %s .' % (list_to_str(max_arch)))
@@ -568,6 +570,7 @@ for interval in range(0, intervals):
         test(loaded_epoch, net)
         growing_epochs.append((interval + 1) * args.grow_interval)
         if args.growing_mode == 'group':
+            grown_group = growing_group
             growing_group = utils.next_group(growing_group, max_arch, current_arch, logger)
     else:
         logger.info('******> stop growing all groups')
