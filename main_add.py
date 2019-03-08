@@ -65,7 +65,7 @@ def get_module(name, *args, **keywords):
     return net
 
 def get_optimizer(net):
-    if 'sgd' == args.optimizer:
+    if 'sgd' == args.optimizer or 'sgdc' == args.optimizer:
         optimizer = optim.SGD(net.parameters(), lr=args.lr, momentum=0.9, weight_decay=5e-4)
     elif 'adam' == args.optimizer:
         optimizer = optim.Adam(net.parameters(), lr=args.lr, weight_decay=5e-4)
@@ -349,7 +349,7 @@ def can_grow(maxlim, arch):
             return True
     return False
 
-num_tail_epochs = args.tail_epochs if args.optimizer == 'sgd' else 0
+num_tail_epochs = args.tail_epochs if ('sgd' == args.optimizer or 'sgdc' == args.optimizer) else 0
 last_epoch = -1
 growing_epochs = []
 intervals = (args.epochs - 1) // args.grow_interval + 1
@@ -382,7 +382,7 @@ for interval in range(0, intervals):
 
     # training and testing
     for epoch in range(interval*args.grow_interval, (interval+1)*args.grow_interval):
-        if 'sgd' == args.optimizer:
+        if 'sgdc' == args.optimizer:
             e = epoch % args.grow_interval
             if e < args.grow_interval // 2:
                 set_learning_rate(optimizer, args.lr)
@@ -417,7 +417,7 @@ for interval in range(0, intervals):
                 break
     last_epoch = (interval + 1) * args.grow_interval - 1
 
-set_learning_rate(optimizer, args.lr * 0.1)
+set_learning_rate(optimizer, args.lr)
 for epoch in range(last_epoch + 1, last_epoch + 1 + num_tail_epochs):
     if (epoch == last_epoch + 1) or (epoch == last_epoch + 1 + num_tail_epochs // 2):
         logger.info('======> decaying learning rate')
