@@ -46,7 +46,7 @@ parser.add_argument('--reset-states', '--rs', action='store_true', help='reset o
 parser.add_argument('--init-meta', default=1.0, type=float, help='a meta parameter for initializer')
 parser.add_argument('--tail-epochs', '--te', default=100, type=int, help='the number of epochs after growing epochs (--epochs) for sgd optimizer')
 parser.add_argument('--batch-size', '--bz', default=128, type=int, help='batch size')
-parser.add_argument('--resume', '-r', action='store_true', help='resume from checkpoint')
+parser.add_argument('--dataset', default='CIFAR10', type=str, help='dataset (CIFAR10, CIFAR100, SVHN, FashionMNIST, MNIST)')
 
 args = parser.parse_args()
 
@@ -203,26 +203,54 @@ logger.info("Saving to %s", save_path)
 logger.info("Running arguments: %s", args)
 
 # Data
-logger.info('==> Preparing data..')
-transform_train = transforms.Compose([
-    transforms.RandomCrop(32, padding=4),
-    transforms.RandomHorizontalFlip(),
-    transforms.ToTensor(),
-    transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
-])
+logger.info('==> Preparing data %s..' % args.dataset)
+train_padding = 4 if utils.datasets[args.dataset]['size'] == 32 else (32 - utils.datasets[args.dataset]['size'] ) / 2
+test_padding = 0 if utils.datasets[args.dataset]['size'] == 32 else (32 - utils.datasets[args.dataset]['size'] ) / 2
+assert (test_padding * 2 + utils.datasets[args.dataset]['size']) == 32
+logger.info('train pad = %d, test pad = %d' % (train_padding, test_padding))
+if 'CIFAR10' == args.dataset or 'CIFAR100' == args.dataset or 'FashionMNIST' == args.dataset:
+    logger.info('==> RandomHorizontalFlip enabled..')
+    transform_train = transforms.Compose([
+        transforms.RandomCrop(32, padding=train_padding),
+        transforms.RandomHorizontalFlip(),
+        transforms.ToTensor(),
+        transforms.Normalize(utils.datasets[args.dataset]['mean'], utils.datasets[args.dataset]['std']),
+    ])
+else:
+    logger.info('==> RandomHorizontalFlip disabled..')
+    transform_train = transforms.Compose([
+        transforms.RandomCrop(32, padding=train_padding),
+        transforms.ToTensor(),
+        transforms.Normalize(utils.datasets[args.dataset]['mean'], utils.datasets[args.dataset]['std']),
+    ])
 
 transform_test = transforms.Compose([
+    transforms.RandomCrop(32, padding=test_padding), # deterministic
     transforms.ToTensor(),
-    transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
+    transforms.Normalize(utils.datasets[args.dataset]['mean'], utils.datasets[args.dataset]['std']),
 ])
 
-trainset = torchvision.datasets.CIFAR10(root='./data', train=True, download=True, transform=transform_train)
+# trainset = torchvision.datasets.CIFAR10(root='./data', train=True, download=True, transform=transform_train)
+if 'SVHN' == args.dataset:
+    trainset = getattr(torchvision.datasets, args.dataset)(root='./data-' + args.dataset, split='train', download=True,
+                                                           transform=transform_train)
+else:
+    trainset = getattr(torchvision.datasets, args.dataset)(root='./data-' + args.dataset, train=True, download=True,
+                                                           transform=transform_train)
+logger.info('%d training samples.' % len(trainset))
+
+logger.info('%d training samples are used for training' % len(trainset))
 trainloader = torch.utils.data.DataLoader(trainset, batch_size=args.batch_size, shuffle=True, num_workers=2)
 
-testset = torchvision.datasets.CIFAR10(root='./data', train=False, download=True, transform=transform_test)
+# testset = torchvision.datasets.CIFAR10(root='./data', train=False, download=True, transform=transform_test)
+if 'SVHN' == args.dataset:
+    testset = getattr(torchvision.datasets, args.dataset)(root='./data-' + args.dataset, split='test', download=True, transform=transform_test)
+else:
+    testset = getattr(torchvision.datasets, args.dataset)(root='./data-' + args.dataset, train=False, download=True, transform=transform_test)
 testloader = torch.utils.data.DataLoader(testset, batch_size=100, shuffle=False, num_workers=2)
+logger.info('%d test samples.' % len(testset))
 
-classes = ('plane', 'car', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck')
+# classes = ('plane', 'car', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck')
 
 # Model
 logger.info('==> Building model..')
@@ -237,7 +265,9 @@ for cnt, v in enumerate(current_arch):
         growing_group = cnt
         break
 
-net = get_module(args.residual, current_arch)
+net = get_module(args.residual, current_arch,
+                num_classes=utils.datasets[args.dataset]['num_classes'],
+                image_channels=utils.datasets[args.dataset]['image_channels'])
 # net = VGG('VGG19')
 # net = ResNet18()
 # net = PreActResNet18()
@@ -370,7 +400,9 @@ for interval in range(0, intervals):
             # current_arch[growing_group] += 1
             current_arch = utils.next_arch(args.growing_mode, max_arch, current_arch, logger, rate=args.rate, group=growing_group)
             logger.info('******> growing to resnet-%s before epoch %d' % (list_to_str(current_arch), interval*args.grow_interval))
-            net = get_module(args.residual, num_blocks=current_arch)
+            net = get_module(args.residual, num_blocks=current_arch,
+                num_classes=utils.datasets[args.dataset]['num_classes'],
+                image_channels=utils.datasets[args.dataset]['image_channels'])
             optimizer = get_optimizer(net)
             loaded_epoch = load_all(net, optimizer, save_ckpt)
             logger.info('testing new model ...')
