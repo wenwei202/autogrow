@@ -37,6 +37,19 @@ class BasicSwitchBlock(nn.Module):
         out = F.relu(out)
         return out
 
+class PlainBlock(nn.Module):
+    expansion = 1
+
+    def __init__(self, in_planes, planes, stride=1):
+        super(PlainBlock, self).__init__()
+        self.conv1 = nn.Conv2d(in_planes, planes, kernel_size=3, stride=stride, padding=1, bias=False)
+        self.bn1 = nn.BatchNorm2d(planes)
+
+    def forward(self, x):
+        out = F.relu(self.bn1(self.conv1(x)))
+        return out
+
+
 class BasicBlock(nn.Module):
     expansion = 1
 
@@ -160,6 +173,11 @@ def CifarResNetBasic(num_blocks, num_classes=10, image_channels=3):
 def CifarSwitchResNetBasic(num_blocks, num_classes=10, image_channels=3):
     assert len(num_blocks) == 3, "3 blocks are needed, but %d is found." % len(num_blocks)
     return CifarResNet(BasicSwitchBlock, num_blocks, num_classes=num_classes, image_channels=image_channels)
+
+def PlainNet(num_blocks, num_classes=10, image_channels=3):
+    assert len(num_blocks) == 4, "4 blocks are needed, but %d is found." % len(num_blocks)
+    # ResNet is NOT a ResNet, it's just a building func
+    return ResNet(PlainBlock, num_blocks, num_classes=num_classes, image_channels=image_channels)
 
 def ResNetBasic(num_blocks, num_classes=10, image_channels=3):
     assert len(num_blocks) == 4, "4 blocks are needed, but %d is found." % len(num_blocks)
