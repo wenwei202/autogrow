@@ -38,6 +38,7 @@ parser.add_argument('--growing-mode', default='group', type=str, help='how new s
 parser.add_argument('--rate', default=0.4, type=float, help='the rate to grow when --growing-mode=rate')
 parser.add_argument('--grow-interval', '--gi', default=100, type=int, help='an interval (in epochs) to grow new structures')
 parser.add_argument('--net', default='1-1-1', type=str, help='starting net')
+parser.add_argument('--max-net', default='200-200-200', type=str, help='The maximum net')
 parser.add_argument('--residual', default='CifarResNetBasic', type=str, help='the type of residual block (ResNetBasic or ResNetBottleneck or CifarResNetBasic)')
 parser.add_argument('--initializer', '--init', default='gaussian', type=str, help='initializers of new structures (zero, uniform, gaussian, adam)')
 
@@ -279,7 +280,7 @@ logger.info('%d test samples.' % len(testset))
 # Model
 logger.info('==> Building model..')
 current_arch = list(map(int, args.net.split('-')))
-max_arch = [36]*len(current_arch)
+max_arch = list(map(int, args.max_net.split('-')))
 pad_arch = list(map(int, args.pad_net.split('-'))) if args.pad_net else None
 if len(current_arch) != len(max_arch):
     logger.fatal('max_arch has different size.')
