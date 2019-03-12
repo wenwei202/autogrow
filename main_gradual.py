@@ -56,7 +56,7 @@ parser.add_argument('--init-meta', default=1.0, type=float, help='a meta paramet
 parser.add_argument('--batch-size', '--bz', default=128, type=int, help='batch size')
 parser.add_argument('--evaluate', default='', type=str, metavar='PATH',
                     help='path to checkpoint (default: none)')
-parser.add_argument('--pad-net', default='', type=str, metavar='PATH',
+parser.add_argument('--pad-net', default='', type=str, metavar='NET',
                     help='a smallest net to be padded to (default: none)')
 parser.add_argument('--pad-epochs', default=4, type=int, help='the padding step for visualization')
 parser.add_argument('--dataset-ratio', default=1.0, type=float, help='the ratio of training dataset for learning')

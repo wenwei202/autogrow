@@ -47,8 +47,32 @@ parser.add_argument('--init-meta', default=1.0, type=float, help='a meta paramet
 parser.add_argument('--tail-epochs', '--te', default=100, type=int, help='the number of epochs after growing epochs (--epochs) for sgd optimizer')
 parser.add_argument('--batch-size', '--bz', default=128, type=int, help='batch size')
 parser.add_argument('--dataset', default='CIFAR10', type=str, help='dataset (CIFAR10, CIFAR100, SVHN, FashionMNIST, MNIST)')
+parser.add_argument('--pad-net', default='', type=str, metavar='NET',
+                    help='a smallest net to be padded to (default: none)')
+parser.add_argument('--pad-epochs', default=4, type=int, help='the padding step for visualization')
 
 args = parser.parse_args()
+
+def save_model_with_padding(epoch, train_accu, model, new_arch, path):
+    new_model = get_module(args.residual, num_blocks=new_arch,
+                           num_classes=utils.datasets[args.dataset]['num_classes'],
+                           image_channels=utils.datasets[args.dataset]['image_channels'])
+    orig_params_data = {}
+    for n, p in model.named_parameters():
+        orig_params_data[n] = p.data
+    for n, p in new_model.named_parameters():
+        if n not in orig_params_data:
+            logger.info('%s are set to zeros' % n)
+            p.data.zero_()
+        else:
+            logger.info('%s are kept' % n)
+            p.data = orig_params_data[n]
+
+    torch.save({
+        'epoch': epoch,
+        'train_accu': train_accu,
+        'net': new_model.state_dict(),
+    }, path)
 
 def list_to_str(l):
     list(map(str, l))
@@ -256,6 +280,7 @@ logger.info('%d test samples.' % len(testset))
 logger.info('==> Building model..')
 current_arch = list(map(int, args.net.split('-')))
 max_arch = [36]*len(current_arch)
+pad_arch = list(map(int, args.pad_net.split('-'))) if args.pad_net else None
 if len(current_arch) != len(max_arch):
     logger.fatal('max_arch has different size.')
     exit()
@@ -265,7 +290,7 @@ for cnt, v in enumerate(current_arch):
         growing_group = cnt
         break
 
-net = get_module(args.residual, current_arch,
+net = get_module(args.residual, num_blocks=current_arch,
                 num_classes=utils.datasets[args.dataset]['num_classes'],
                 image_channels=utils.datasets[args.dataset]['image_channels'])
 # net = VGG('VGG19')
@@ -427,6 +452,9 @@ for interval in range(0, intervals):
         curves[epoch, 3], curves[epoch, 4] = test(epoch, net, save=True)
         curves[epoch, 5] = time.time() / 60.0
         ema.push(curves[epoch, 4])
+        if args.pad_net and (epoch % args.pad_epochs == 0):
+            save_model_with_padding(epoch, curves[epoch, 2], net, pad_arch,
+                                    os.path.join(save_path, 'model_pad_%d.t7' % epoch))
 
     if grow_check:  # check after every interval
         delta_accu = ema.delta(-1 - args.grow_interval, -1)
@@ -459,6 +487,9 @@ for epoch in range(last_epoch + 1, last_epoch + 1 + num_tail_epochs):
     curves[epoch, 3], curves[epoch, 4] = test(epoch, net, save=True)
     curves[epoch, 5] = time.time() / 60.0
     ema.push(curves[epoch, 4])
+    if args.pad_net and (epoch % args.pad_epochs == 0):
+        save_model_with_padding(epoch, curves[epoch, 2], net, pad_arch,
+                                os.path.join(save_path, 'model_pad_%d.t7' % epoch))
 
 # align time
 for e in range(curves.shape[0]):
