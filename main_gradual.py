@@ -122,7 +122,7 @@ def save_model_with_padding(epoch, train_accu, model, new_arch, path):
             p.data.zero_()
         else:
             logger.info('%s are kept' % n)
-            p.data = orig_params_data[n]
+            p.data.copy_(orig_params_data[n])
 
     torch.save({
         'epoch': epoch,
