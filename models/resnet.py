@@ -149,12 +149,15 @@ class ResNet(nn.Module):
         return out
 
 class CifarResNet(nn.Module):
-    def __init__(self, block, num_blocks, num_classes=10, image_channels=3):
+    def __init__(self, block, num_blocks, num_classes=10, image_channels=3, batchnorm=True):
         super(CifarResNet, self).__init__()
         self.in_planes = 16
-
-        self.conv1 = nn.Conv2d(image_channels, 16, kernel_size=3, stride=1, padding=1, bias=False)
-        self.bn1 = nn.BatchNorm2d(16)
+        if batchnorm:
+            self.conv1 = nn.Conv2d(image_channels, 16, kernel_size=3, stride=1, padding=1, bias=False)
+            self.bn1 = nn.BatchNorm2d(16)
+        else:
+            self.conv1 = nn.Conv2d(image_channels, 16, kernel_size=3, stride=1, padding=1, bias=True)
+            self.bn1 = nn.Sequential()
         self.layer1 = self._make_layer(block, 16, num_blocks[0], stride=1)
         self.layer2 = self._make_layer(block, 32, num_blocks[1], stride=2)
         self.layer3 = self._make_layer(block, 64, num_blocks[2], stride=2)
@@ -182,6 +185,18 @@ def CifarResNetBasic(num_blocks, num_classes=10, image_channels=3):
     assert len(num_blocks) == 3, "3 blocks are needed, but %d is found." % len(num_blocks)
     print ('num_classes=%d, image_channels=%d' % (num_classes, image_channels))
     return CifarResNet(BasicBlock, num_blocks, num_classes=num_classes, image_channels=image_channels)
+
+def CifarPlainNet(num_blocks, num_classes=10, image_channels=3):
+    assert len(num_blocks) == 3, "3 blocks are needed, but %d is found." % len(num_blocks)
+    print ('num_classes=%d, image_channels=%d' % (num_classes, image_channels))
+    # CifarResNet is NOT a ResNet, it's just a building func
+    return CifarResNet(PlainBlock, num_blocks, num_classes=num_classes, image_channels=image_channels)
+
+def CifarPlainNoBNNet(num_blocks, num_classes=10, image_channels=3):
+    assert len(num_blocks) == 3, "3 blocks are needed, but %d is found." % len(num_blocks)
+    print ('num_classes=%d, image_channels=%d' % (num_classes, image_channels))
+    # CifarResNet is NOT a ResNet, it's just a building func
+    return CifarResNet(PlainNoBNBlock, num_blocks, num_classes=num_classes, image_channels=image_channels, batchnorm=False)
 
 def CifarSwitchResNetBasic(num_blocks, num_classes=10, image_channels=3):
     assert len(num_blocks) == 3, "3 blocks are needed, but %d is found." % len(num_blocks)

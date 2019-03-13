@@ -44,7 +44,7 @@ parser.add_argument('--net', default='1-1-1', type=str, help='starting net')
 parser.add_argument('--sub-net', default='1-1-1', type=str, help='a sub net to grow')
 parser.add_argument('--max-net', default='200-200-200', type=str, help='The maximum net')
 parser.add_argument('--residual', default='CifarResNetBasic', type=str,
-                    help='the type of residual block (CifarSwitchResNetBasic, PlainNet, PlainNoBNNet, ResNetBasic or ResNetBottleneck or CifarResNetBasic)')
+                    help='the type of residual block (CifarSwitchResNetBasic, CifarPlainNoBNNet, CifarPlainNet, PlainNet, PlainNoBNNet, ResNetBasic or ResNetBottleneck or CifarResNetBasic)')
 parser.add_argument('--initializer', '--init', default='gaussian', type=str, help='initializers of new structures (zero, uniform, gaussian, adam)')
 
 parser.add_argument('--switch-off', '--so', action='store_true', help='switch off at initialization')
@@ -194,9 +194,9 @@ def load_all(model, optimizer, path):
         reinit_pattern = '.*layer.*bn2\.((weight)|(bias))$'
     elif args.residual == 'ResNetBottleneck':
         reinit_pattern = '.*layer.*bn3\.((weight)|(bias))$'
-    elif args.residual == 'PlainNet' or args.residual == 'PlainNoBNNet':
+    elif args.residual == 'PlainNet' or args.residual == 'PlainNoBNNet' or args.residual == 'CifarPlainNet' or args.residual == 'CifarPlainNoBNNet':
         reinit_pattern = 'UseDefaultInitialization'
-        logger.info('No reinitialization for PlainNet or PlainNoBNNet')
+        logger.info('No reinitialization for PlainNet or PlainNoBNNet or CifarPlainNet or CifarPlainNoBNNet')
     else:
         logger.fatal('Unknown --residual')
         exit()
