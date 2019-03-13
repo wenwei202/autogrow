@@ -113,6 +113,7 @@ def save_model_with_padding(epoch, train_accu, model, new_arch, path):
     new_model = get_module(args.residual, args.grow_interval, new_arch,
                            num_classes=utils.datasets[args.dataset]['num_classes'],
                            image_channels=utils.datasets[args.dataset]['image_channels'])
+    new_model.load_state_dict(model.state_dict(), strict=False)
     orig_params_data = {}
     for n, p in model.named_parameters():
         orig_params_data[n] = p.data
@@ -122,7 +123,6 @@ def save_model_with_padding(epoch, train_accu, model, new_arch, path):
             p.data.zero_()
         else:
             logger.info('%s are kept' % n)
-            p.data.copy_(orig_params_data[n])
 
     torch.save({
         'epoch': epoch,
