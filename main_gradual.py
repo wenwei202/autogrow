@@ -184,6 +184,9 @@ def load_all(model, optimizer, path):
         reinit_pattern = '.*layer.*bn2\.((weight)|(bias))$'
     elif args.residual == 'ResNetBottleneck':
         reinit_pattern = '.*layer.*bn3\.((weight)|(bias))$'
+    elif args.residual == 'PlainNet':
+        reinit_pattern = 'UseDefaultInitialization'
+        logger.info('No reinitialization for PlainNet')
     else:
         logger.fatal('Unknown --residual')
         exit()

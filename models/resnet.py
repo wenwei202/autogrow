@@ -2,7 +2,7 @@ import torch.nn as nn
 import torch.utils.model_zoo as model_zoo
 
 
-__all__ = ['ResNet', 'ResNetBasic', 'ResNetBottleneck', 'resnet18', 'resnet34', 'resnet50', 'resnet101',
+__all__ = ['PlainNet', 'ResNet', 'ResNetBasic', 'ResNetBottleneck', 'resnet18', 'resnet34', 'resnet50', 'resnet101',
            'resnet152']
 
 
@@ -25,6 +25,21 @@ def conv1x1(in_planes, out_planes, stride=1):
     """1x1 convolution"""
     return nn.Conv2d(in_planes, out_planes, kernel_size=1, stride=stride, bias=False)
 
+class PlainBlock(nn.Module):
+    expansion = 1
+
+    def __init__(self, inplanes, planes, stride=1, downsample=None):
+        super(PlainBlock, self).__init__()
+        self.conv1 = conv3x3(inplanes, planes, stride)
+        self.bn1 = nn.BatchNorm2d(planes)
+        self.relu = nn.ReLU(inplace=True)
+        self.stride = stride
+
+    def forward(self, x):
+        out = self.conv1(x)
+        out = self.bn1(out)
+        out = self.relu(out)
+        return out
 
 class BasicBlock(nn.Module):
     expansion = 1
@@ -166,6 +181,10 @@ class ResNet(nn.Module):
 def ResNetBasic(num_blocks):
     assert len(num_blocks) == 4, "4 blocks are needed, but %d is found." % len(num_blocks)
     return ResNet(BasicBlock, num_blocks)
+
+def PlainNet(num_blocks):
+    assert len(num_blocks) == 4, "4 blocks are needed, but %d is found." % len(num_blocks)
+    return ResNet(PlainBlock, num_blocks)
 
 def ResNetBottleneck(num_blocks):
     assert len(num_blocks) == 4, "4 blocks are needed, but %d is found." % len(num_blocks)
